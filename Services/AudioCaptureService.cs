@@ -15,8 +15,6 @@ namespace WindowsLiveCaptionsReader.Services
         public event EventHandler<float>? AudioLevelChanged; // New for validation
 
         private SpeechRecognitionEngine? _recognizer;
-        private WaveInEvent? _waveIn;
-        private SpeechStreamer? _stream;
         private int _selectedDeviceIndex = -1;
         private bool _isListening;
 
@@ -150,8 +148,6 @@ namespace WindowsLiveCaptionsReader.Services
         {
             Stop();
             _recognizer?.Dispose();
-            _waveIn?.Dispose();
-            _stream?.Dispose();
         }
     }
     

@@ -9,7 +9,7 @@ namespace WindowsLiveCaptionsReader.Services
 {
     public class ChromeSessionService
     {
-        private IWebDriver _driver;
+        private IWebDriver? _driver;
 
         public bool ConnectToExistingSession()
         {

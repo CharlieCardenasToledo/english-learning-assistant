@@ -26,7 +26,6 @@ namespace WindowsLiveCaptionsReader
         private string _userName         = "Charlie";
         private string _englishLevel     = "B1";
 
-        private bool _whisperReady = false;
 
         public SetupWindow()
         {
@@ -73,12 +72,10 @@ namespace WindowsLiveCaptionsReader
             if (valid)
             {
                 SetWhisperState("ready", $"Modelo listo: {option.FileName}");
-                _whisperReady = true;
             }
             else
             {
                 SetWhisperState("download");
-                _whisperReady = false;
             }
 
             UpdateStartButton();
@@ -119,7 +116,6 @@ namespace WindowsLiveCaptionsReader
                 WhisperProgressBar.IsIndeterminate = false;
                 WhisperProgressBar.Value = 100;
                 SetWhisperState("ready", $"Listo: {option.FileName}");
-                _whisperReady = true;
                 UpdateStartButton();
             }
             catch (Exception ex)
