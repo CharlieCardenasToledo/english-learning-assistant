@@ -12,9 +12,9 @@
     <Product>English Learning Assistant</Product>
     <Company>Charlie Cardenas Toledo</Company>
     <Copyright>Copyright © 2026</Copyright>
-    <Version>1.2.0</Version>
-    <AssemblyVersion>1.2.0.0</AssemblyVersion>
-    <FileVersion>1.2.0.0</FileVersion>
+    <Version>1.2.1</Version>
+    <AssemblyVersion>1.2.1.0</AssemblyVersion>
+    <FileVersion>1.2.1.0</FileVersion>
     <Description>AI-powered English learning assistant for B1 students</Description>
 
     <!-- Publishing Configuration -->
