@@ -37,14 +37,25 @@ namespace WindowsLiveCaptionsReader
         private readonly CaptionPipeline _captions = new();
 
         // Question pipeline: detection is cheap (L1-L3); generation queued via Channel.
-        // A new question cancels in-flight generation — but non-question sentences never do.
+        // FIFO queue: every detected question gets answered in order — a new question never
+        // cancels the in-flight generation. If 5 pile up, the oldest is dropped.
         private readonly Channel<QuestionJob> _questionChannel =
             Channel.CreateBounded<QuestionJob>(
-                new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
-        private CancellationTokenSource? _generationCts;
+                new BoundedChannelOptions(5) { FullMode = BoundedChannelFullMode.DropOldest });
         private readonly CancellationTokenSource _pipelineShutdown = new();
+        // Cancelled only by explicit user actions (clear panel / shutdown), never by
+        // newly detected questions — those wait in the queue instead.
+        private CancellationTokenSource? _currentGenerationAbort;
+        // While an answer is being generated, live translation via LM Studio is paused
+        // (sentences buffer up and are translated in one batch afterwards) so the LLM
+        // is fully dedicated to answering. LibreTranslate route is never paused.
+        private volatile bool _isGeneratingAnswer;
+        private readonly List<string> _pausedTranslationBuffer = new();
+        private readonly object _pauseLock = new();
         // Per-request safety net: don't rely on HttpClient's 120s global timeout
-        private static readonly TimeSpan QuestionGenerationTimeout = TimeSpan.FromSeconds(45);
+        // Measured: ~22s for a full structured answer (437 tokens) on gemma-4-e4b with the
+        // server idle — 60s leaves headroom for longer context or a busier GPU.
+        private static readonly TimeSpan QuestionGenerationTimeout = TimeSpan.FromSeconds(60);
         private static readonly TimeSpan AutoTranslateTimeout     = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan L4ClassificationTimeout  = TimeSpan.FromSeconds(15);
         private string _previousSentence = "";
@@ -161,7 +172,6 @@ namespace WindowsLiveCaptionsReader
         protected override void OnClosed(EventArgs e)
         {
             _pipelineShutdown.Cancel();
-            _generationCts?.Cancel();
             _reader?.Stop();
             _micService.StopListening();
             _sessionService?.Dispose();
@@ -278,8 +288,9 @@ namespace WindowsLiveCaptionsReader
 
                 if (result.Confidence >= 0.70f)
                 {
-                    // High confidence → cancel in-flight generation and queue the new question
-                    _generationCts?.Cancel();
+                    // High confidence → enqueue FIFO; the worker answers questions in order.
+                    // Pause live translation right away so the LLM slot goes to the answer.
+                    _isGeneratingAnswer = true;
                     await _questionChannel.Writer.WriteAsync(new QuestionJob(sentence, result));
                     ShowQuestionIndicator(result);
                 }
@@ -287,6 +298,9 @@ namespace WindowsLiveCaptionsReader
                 {
                     // Medium confidence → show badge; run L4-AI in background
                     ShowQuestionIndicator(result);
+                    // Skip the AI check while an answer is being generated: a 1-token
+                    // classification isn't worth delaying the in-flight answer for.
+                    if (_isGeneratingAnswer) return;
                     string sentCapture = sentence;
                     _ = Task.Run(async () =>
                     {
@@ -303,8 +317,8 @@ namespace WindowsLiveCaptionsReader
                                     Type        = QuestionType.Indirect,
                                     DetectedVia = "L4-AI"
                                 };
-                                // TryWrite (non-cancelling): don't interrupt an ongoing generation
-                                _questionChannel.Writer.TryWrite(new QuestionJob(sentCapture, aiResult));
+                                if (_questionChannel.Writer.TryWrite(new QuestionJob(sentCapture, aiResult)))
+                                    _isGeneratingAnswer = true;
                             }
                         }
                         catch (Exception ex)
@@ -321,23 +335,23 @@ namespace WindowsLiveCaptionsReader
         }
 
         // Long-running task: reads from the question channel and generates responses.
-        // Only one response is generated at a time; new questions cancel the current one.
+        // One response at a time, strictly in FIFO order; questions are never cancelled
+        // by newer ones. When the queue drains, paused live translation resumes.
         private async Task RunQuestionWorkerAsync(CancellationToken shutdownToken)
         {
             try
             {
                 await foreach (var job in _questionChannel.Reader.ReadAllAsync(shutdownToken))
                 {
-                    _generationCts?.Cancel();
-                    _generationCts = new CancellationTokenSource();
-                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(
-                        _generationCts.Token, shutdownToken);
+                    _isGeneratingAnswer = true;
+                    using var abort = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+                    _currentGenerationAbort = abort;
 
                     try
                     {
-                        await GenerateResponseAsync(job, linked.Token);
+                        await GenerateResponseAsync(job, abort.Token);
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException) when (!shutdownToken.IsCancellationRequested)
                     {
                         Dispatcher.Invoke(() => ResponseLoadingBar.Visibility = Visibility.Collapsed);
                     }
@@ -350,25 +364,48 @@ namespace WindowsLiveCaptionsReader
                             ResponseStatus.Text = $"err: {ex.Message[..Math.Min(60, ex.Message.Length)]}";
                         });
                     }
+
+                    // Queue drained → release the LLM back to live translation
+                    if (_questionChannel.Reader.Count == 0)
+                    {
+                        _isGeneratingAnswer = false;
+                        ResumePausedTranslation();
+                    }
                 }
             }
             catch (OperationCanceledException) { }
         }
 
+        // Flushes sentences that arrived while translation was paused, as one batch request.
+        private void ResumePausedTranslation()
+        {
+            string pending;
+            lock (_pauseLock)
+            {
+                if (_pausedTranslationBuffer.Count == 0) return;
+                pending = string.Join(" ", _pausedTranslationBuffer);
+                _pausedTranslationBuffer.Clear();
+            }
+            _ = AutoTranslateSentenceAsync(pending);
+        }
+
         // Generates context + EN options + ES translation for a detected question.
-        // Runs inside RunQuestionWorkerAsync; token is cancelled by a newer question or shutdown.
+        // Runs inside RunQuestionWorkerAsync; token is cancelled only on shutdown or
+        // explicit user abort (plus the internal QuestionGenerationTimeout).
         private async Task GenerateResponseAsync(QuestionJob job, CancellationToken token)
         {
             string sentence = job.Sentence;
             var qResult = job.Detection;
             bool isForced = qResult.DetectedVia == "Manual";
+            int queued = _questionChannel.Reader.Count;
 
             string context = GetRecentContext();
 
             Dispatcher.Invoke(() =>
             {
                 QuestionText.Text              = sentence;
-                QuestionBadge.Text             = isForced ? "✏️ Manual" : $"❓ {qResult.Confidence:P0}";
+                QuestionBadge.Text             = (isForced ? "✏️ Manual" : $"❓ {qResult.Confidence:P0}")
+                                               + (queued > 0 ? $" · {queued} en cola" : "");
                 QuestionBadgeBorder.Visibility = Visibility.Visible;
                 QuestionContextText.Text       = "Analizando contexto...";
                 ResponseEnText.Text            = "Generando opciones...";
@@ -507,14 +544,16 @@ namespace WindowsLiveCaptionsReader
             var forced = new QuestionDetectionResult
                 { IsQuestion = true, Confidence = 1.0f, Type = QuestionType.Direct, DetectedVia = "Manual" };
             ShowQuestionIndicator(forced);
-            _generationCts?.Cancel();
+            _isGeneratingAnswer = true;   // manual questions join the same FIFO queue
             await _questionChannel.Writer.WriteAsync(new QuestionJob(question, forced));
         }
 
         private void ShowQuestionIndicator(QuestionDetectionResult result) =>
             Dispatcher.Invoke(() =>
             {
-                QuestionBadge.Text             = $"❓ {result.Confidence:P0}";
+                int queued = _questionChannel.Reader.Count;
+                QuestionBadge.Text             = $"❓ {result.Confidence:P0}"
+                                               + (queued > 1 ? $" · {queued} en cola" : "");
                 QuestionBadgeBorder.Visibility = Visibility.Visible;
             });
 
@@ -582,6 +621,17 @@ namespace WindowsLiveCaptionsReader
         {
             if (sentence.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < MinWordsForAutoTranslate)
                 return;
+
+            // While an answer is being generated, don't compete for the LLM: buffer the
+            // sentence and translate the whole batch when the question queue drains.
+            // LibreTranslate doesn't touch LM Studio, so that route is never paused.
+            if (_isGeneratingAnswer && !_libreTranslateAvailable)
+            {
+                lock (_pauseLock) _pausedTranslationBuffer.Add(sentence);
+                _ = Dispatcher.InvokeAsync(() =>
+                    TranslationStatus.Text = "⏸ pausada (respondiendo pregunta)");
+                return;
+            }
 
             _autoTranslateCts?.Cancel();
             _autoTranslateCts = new CancellationTokenSource(AutoTranslateTimeout);
@@ -1134,7 +1184,10 @@ namespace WindowsLiveCaptionsReader
                 "Confirmar limpieza", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (confirm != MessageBoxResult.Yes) return;
 
-            _generationCts?.Cancel();
+            _currentGenerationAbort?.Cancel();
+            while (_questionChannel.Reader.TryRead(out _)) { }   // drain pending questions
+            _isGeneratingAnswer = false;
+            lock (_pauseLock) _pausedTranslationBuffer.Clear();
             _autoTranslateCts?.Cancel();
             _autoTranslationBuffer = "";
             _previousSentence = "";
