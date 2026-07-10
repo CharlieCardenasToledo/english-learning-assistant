@@ -15,12 +15,12 @@ namespace WindowsLiveCaptionsReader.Services
         private readonly HttpClient _httpClient;
         private const string BaseUrl = "http://localhost:1234";
         private const string ChatUrl = BaseUrl + "/v1/chat/completions";
-        private string _modelName = "google/gemma-4-e4b";
+        private string _modelName = "llama-3.2-3b-instruct";
 
         private static readonly TimeSpan ShortTimeout = TimeSpan.FromSeconds(10);
         private static readonly TimeSpan LongTimeout  = TimeSpan.FromSeconds(120);
 
-        public LmStudioService(string modelName = "google/gemma-4-e4b")
+        public LmStudioService(string modelName = "llama-3.2-3b-instruct")
         {
             _httpClient = new HttpClient();
             _httpClient.Timeout = LongTimeout;
@@ -135,23 +135,24 @@ namespace WindowsLiveCaptionsReader.Services
             return await SendStreamingRequestAsync(requestData, onPartialUpdate, token);
         }
 
-        public async Task<string> StreamChatAsync(string systemPrompt, string userPrompt, Action<string> onPartialUpdate, CancellationToken token = default)
+        public async Task<string> StreamChatAsync(string systemPrompt, string userPrompt, Action<string> onPartialUpdate, CancellationToken token = default, int? maxTokens = null, Action<string>? onReasoningUpdate = null)
         {
             if (string.IsNullOrWhiteSpace(userPrompt)) return "";
 
-            var requestData = new
+            var requestData = new Dictionary<string, object>
             {
-                model    = _modelName,
-                messages = new[]
+                ["model"] = _modelName,
+                ["messages"] = new[]
                 {
                     new { role = "system", content = systemPrompt },
                     new { role = "user",   content = userPrompt   }
                 },
-                stream      = true,
-                temperature = 0.4
+                ["stream"]      = true,
+                ["temperature"] = 0.4
             };
+            if (maxTokens.HasValue) requestData["max_tokens"] = maxTokens.Value;
 
-            return await SendStreamingRequestAsync(requestData, onPartialUpdate, token);
+            return await SendStreamingRequestAsync(requestData, onPartialUpdate, token, onReasoningUpdate);
         }
 
         public async Task<string> TranslateAsync(string text, string targetLang = "Spanish")
@@ -346,7 +347,7 @@ Word|Definition|Translation";
 
         // ── Private helpers ────────────────────────────────────────────────
 
-        private async Task<string> SendStreamingRequestAsync(object requestData, Action<string> onPartialUpdate, CancellationToken token)
+        private async Task<string> SendStreamingRequestAsync(object requestData, Action<string> onPartialUpdate, CancellationToken token, Action<string>? onReasoningUpdate = null)
         {
             var jsonContent = JsonSerializer.Serialize(requestData);
             var request = new HttpRequestMessage(HttpMethod.Post, ChatUrl);
@@ -368,6 +369,7 @@ Word|Definition|Translation";
                 using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
                 using var reader = new StreamReader(stream);
                 var sb = new StringBuilder();
+                var reasoningSb = new StringBuilder();
 
                 while (!reader.EndOfStream)
                 {
@@ -394,14 +396,30 @@ Word|Definition|Translation";
                             finishReason.GetString() == "stop")
                             break;
 
-                        if (first.TryGetProperty("delta", out var delta) &&
-                            delta.TryGetProperty("content", out var contentEl))
+                        if (first.TryGetProperty("delta", out var delta))
                         {
-                            var chunk = contentEl.GetString();
-                            if (!string.IsNullOrEmpty(chunk))
+                            // Reasoning models (e.g. gemma-4-e4b) stream "thinking" tokens in
+                            // reasoning_content before any visible content — surface them so
+                            // the UI can show progress instead of appearing frozen.
+                            if (onReasoningUpdate != null &&
+                                delta.TryGetProperty("reasoning_content", out var reasoningEl))
                             {
-                                sb.Append(chunk);
-                                onPartialUpdate(sb.ToString());
+                                var rChunk = reasoningEl.GetString();
+                                if (!string.IsNullOrEmpty(rChunk))
+                                {
+                                    reasoningSb.Append(rChunk);
+                                    onReasoningUpdate(reasoningSb.ToString());
+                                }
+                            }
+
+                            if (delta.TryGetProperty("content", out var contentEl))
+                            {
+                                var chunk = contentEl.GetString();
+                                if (!string.IsNullOrEmpty(chunk))
+                                {
+                                    sb.Append(chunk);
+                                    onPartialUpdate(sb.ToString());
+                                }
                             }
                         }
                     }

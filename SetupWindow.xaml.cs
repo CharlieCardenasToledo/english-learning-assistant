@@ -22,7 +22,7 @@ namespace WindowsLiveCaptionsReader
 
         // Saved settings (populated from file, written on Start)
         private string _whisperModelFile = "ggml-small.en.bin";
-        private string _lmStudioModelName  = "google/gemma-4-e4b";
+        private string _lmStudioModelName  = "llama-3.2-3b-instruct";
         private string _userName         = "Charlie";
         private string _englishLevel     = "B1";
 
@@ -266,7 +266,7 @@ namespace WindowsLiveCaptionsReader
                 if (doc.RootElement.TryGetProperty("userName",     out var u)) _userName         = u.GetString() ?? "Charlie";
                 if (doc.RootElement.TryGetProperty("englishLevel", out var l)) _englishLevel     = l.GetString() ?? "B1";
                 if (doc.RootElement.TryGetProperty("whisperModel", out var w)) _whisperModelFile = w.GetString() ?? "ggml-small.en.bin";
-                if (doc.RootElement.TryGetProperty("lmStudioModel",  out var o)) _lmStudioModelName  = o.GetString() ?? "google/gemma-4-e4b";
+                if (doc.RootElement.TryGetProperty("lmStudioModel",  out var o)) _lmStudioModelName  = o.GetString() ?? "llama-3.2-3b-instruct";
             }
             catch { }
         }

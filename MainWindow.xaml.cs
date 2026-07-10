@@ -53,8 +53,8 @@ namespace WindowsLiveCaptionsReader
         private readonly List<string> _pausedTranslationBuffer = new();
         private readonly object _pauseLock = new();
         // Per-request safety net: don't rely on HttpClient's 120s global timeout
-        // Measured: ~22s for a full structured answer (437 tokens) on gemma-4-e4b with the
-        // server idle — 60s leaves headroom for longer context or a busier GPU.
+        // Measured: ~3.5s full structured answer on llama-3.2-3b-instruct (no reasoning);
+        // 60s leaves headroom for reasoning models (gemma-4-e4b "thinks" 20-80s first).
         private static readonly TimeSpan QuestionGenerationTimeout = TimeSpan.FromSeconds(60);
         private static readonly TimeSpan AutoTranslateTimeout     = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan L4ClassificationTimeout  = TimeSpan.FromSeconds(15);
@@ -66,7 +66,7 @@ namespace WindowsLiveCaptionsReader
         // ─── User settings ────────────────────────────────────────────────────
         private string _userName          = "Charlie";
         private string _englishLevel      = "B1";
-        private string _lmStudioModelName = "google/gemma-4-e4b";
+        private string _lmStudioModelName = "llama-3.2-3b-instruct";
         private static readonly string AppDataDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "EnglishLearningAssistant");
@@ -100,7 +100,7 @@ namespace WindowsLiveCaptionsReader
         {
             InitializeComponent();
             History = new ObservableCollection<TranslationItem>();
-            _translator = new LmStudioService("google/gemma-4-e4b");
+            _translator = new LmStudioService("llama-3.2-3b-instruct");
             _micService = new AudioCaptureService();
 
             try
@@ -407,7 +407,7 @@ namespace WindowsLiveCaptionsReader
                 QuestionBadge.Text             = (isForced ? "✏️ Manual" : $"❓ {qResult.Confidence:P0}")
                                                + (queued > 0 ? $" · {queued} en cola" : "");
                 QuestionBadgeBorder.Visibility = Visibility.Visible;
-                QuestionContextText.Text       = "Analizando contexto...";
+                QuestionContextText.Text       = "…";
                 ResponseEnText.Text            = "Generando opciones...";
                 ResponseEsText.Text            = "...";
                 ResponseStatus.Text            = "";
@@ -437,17 +437,25 @@ namespace WindowsLiveCaptionsReader
             timeoutCts.CancelAfter(QuestionGenerationTimeout);
             var genToken = timeoutCts.Token;
 
+            // [OPTIONS] streams first so option 1 is readable in seconds — what the student
+            // needs to SAY. Context analysis is nice-to-have and comes last. Short limits +
+            // max_tokens cap keep total generation under ~10s instead of 20s+.
             string systemPrompt =
                 $"You are an English tutor helping a {_englishLevel}-level student named {_userName}. " +
-                "The teacher just asked the student a question. Reply using EXACTLY this template, " +
-                "keeping the bracketed section headers:\n" +
-                "[CONTEXT]\n(1-2 sentences IN SPANISH explaining why the teacher asks this and what topic it connects to)\n" +
-                "[OPTIONS]\n1. (English response, max 20 words)\n2. (English response, max 20 words)\n3. (English response, max 20 words)\n" +
+                "The teacher just asked the student a question. Answer FAST and SHORT. " +
+                "Reply using EXACTLY this template, keeping the bracketed section headers:\n" +
+                "[OPTIONS]\n1. (English response, max 12 words)\n2. (English response, max 12 words)\n3. (English response, max 12 words)\n" +
                 "[TRANSLATIONS]\n1. (Spanish translation of option 1)\n2. (Spanish translation of option 2)\n3. (Spanish translation of option 3)\n" +
-                "The 3 options MUST be in English only. Output nothing outside the template.";
+                "[CONTEXT]\n(ONE short sentence in Spanish: why the teacher asks this)\n" +
+                "The 3 options MUST be in English only. Be brief. Output nothing outside the template.";
 
             try
             {
+                // Reasoning models "think" 10-40s before emitting visible content — show live
+                // progress so the panel never looks frozen. Throttled to one update per second.
+                var reasoningSw = System.Diagnostics.Stopwatch.StartNew();
+                int lastShownSecond = -1;
+
                 string full = await _translator.StreamChatAsync(
                     systemPrompt,
                     $"Context:\n{context}\n\nTeacher's question: \"{sentence}\"",
@@ -462,7 +470,19 @@ namespace WindowsLiveCaptionsReader
                             if (es.Length > 0)  ResponseEsText.Text      = es;
                         });
                     },
-                    genToken);
+                    genToken,
+                    maxTokens: 500,   // reasoning tokens count against the budget
+                    onReasoningUpdate: _ =>
+                    {
+                        int sec = (int)reasoningSw.Elapsed.TotalSeconds;
+                        if (sec == lastShownSecond) return;
+                        lastShownSecond = sec;
+                        Dispatcher.InvokeAsync(() =>
+                        {
+                            if (!genToken.IsCancellationRequested)
+                                ResponseEnText.Text = $"🤔 el modelo está razonando… ({sec}s)";
+                        });
+                    });
 
                 genToken.ThrowIfCancellationRequested();
 
@@ -493,12 +513,13 @@ namespace WindowsLiveCaptionsReader
         }
 
         // Splits the assistant's structured reply into its three UI sections.
+        // Template order: OPTIONS → TRANSLATIONS → CONTEXT (answer first, analysis last).
         // Tolerates partial streams: a section is empty until its header has arrived.
         private static (string Ctx, string En, string Es) ParseAssistantSections(string text)
         {
-            string ctx = ExtractSection(text, "[CONTEXT]", "[OPTIONS]");
             string en  = ExtractSection(text, "[OPTIONS]", "[TRANSLATIONS]");
-            string es  = ExtractSection(text, "[TRANSLATIONS]", null);
+            string es  = ExtractSection(text, "[TRANSLATIONS]", "[CONTEXT]");
+            string ctx = ExtractSection(text, "[CONTEXT]", null);
             return (ctx, en, es);
         }
 
@@ -729,7 +750,8 @@ namespace WindowsLiveCaptionsReader
 
         // ─── Context ──────────────────────────────────────────────────────────
 
-        public string GetRecentContext() => _captions.GetRecentContext(15);
+        // 8 lines: enough to ground the answer; every extra input token slows prefill
+        public string GetRecentContext() => _captions.GetRecentContext(8);
 
         // ─── LM Studio health ─────────────────────────────────────────────────
 
@@ -890,7 +912,7 @@ namespace WindowsLiveCaptionsReader
                 var doc = JsonDocument.Parse(File.ReadAllText(SettingsPath));
                 if (doc.RootElement.TryGetProperty("userName",      out var u)) _userName          = u.GetString() ?? "Charlie";
                 if (doc.RootElement.TryGetProperty("englishLevel",  out var l)) _englishLevel      = l.GetString() ?? "B1";
-                if (doc.RootElement.TryGetProperty("lmStudioModel", out var o)) _lmStudioModelName = o.GetString() ?? "google/gemma-4-e4b";
+                if (doc.RootElement.TryGetProperty("lmStudioModel", out var o)) _lmStudioModelName = o.GetString() ?? "llama-3.2-3b-instruct";
             }
             catch (Exception ex) { AppLogger.Error("LoadSettings", ex); }
         }
