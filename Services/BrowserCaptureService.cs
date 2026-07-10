@@ -78,7 +78,7 @@ namespace WindowsLiveCaptionsReader.Services
                     // We start from the focused element (which is likely inside the document) and walk up 
                     // or start from window root and find the Document control type.
                     
-                    AutomationElement documentElement = null;
+                    AutomationElement? documentElement = null;
                     
                     // Strategy A: Walk up from focus
                     if (focusedElement != null)

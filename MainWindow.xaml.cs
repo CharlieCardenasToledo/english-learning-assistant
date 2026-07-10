@@ -23,12 +23,14 @@ namespace WindowsLiveCaptionsReader
     public partial class MainWindow : Window
     {
         // ─── Services ─────────────────────────────────────────────────────────
-        private CaptionReader _reader;
+        // null! : assigned in the constructor's try block; on failure the app shows an
+        // error dialog and runs degraded — callers already guard with null checks.
+        private CaptionReader _reader = null!;
         private LmStudioService _translator;
         private AudioCaptureService _micService;
-        private SessionService _sessionService;
-        private QuestionDetectionService _questionService;
-        private VocabularyService _vocabularyService;
+        private SessionService _sessionService = null!;
+        private QuestionDetectionService _questionService = null!;
+        private VocabularyService _vocabularyService = null!;
         private readonly LibreTranslateService _libreTranslate = new();
         private readonly Services.BrowserCaptureService _browserScanner = new();
         private readonly Services.ChromeSessionService  _chromeService  = new();
@@ -223,16 +225,16 @@ namespace WindowsLiveCaptionsReader
                 _libreTranslateAvailable = ltReady;
                 _libreTranslateLastCheck = DateTime.Now;
                 if (ltReady)
-                    Dispatcher.InvokeAsync(() => TranslationStatus.Text = "LibreTranslate ✓");
+                    _ = Dispatcher.InvokeAsync(() => TranslationStatus.Text = "LibreTranslate ✓");
             });
         }
 
         // ─── Caption capture ──────────────────────────────────────────────────
 
-        private void Reader_StatusChanged(object sender, string e) =>
+        private void Reader_StatusChanged(object? sender, string e) =>
             Dispatcher.Invoke(() => StatusText.Text = e);
 
-        private void Reader_TextChanged(object sender, string text)
+        private void Reader_TextChanged(object? sender, string text)
         {
             if (_isPaused || string.IsNullOrWhiteSpace(text)) return;
             Dispatcher.Invoke(() => AppendCaption(text, sender is AudioCaptureService));

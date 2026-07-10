@@ -51,7 +51,7 @@ namespace WindowsLiveCaptionsReader.Services
             onStatusUpdate?.Invoke("Iniciando LibreTranslate...");
 
             // Buscar el ejecutable libretranslate en el PATH de Python
-            string exe = FindLibreTranslateExe();
+            string? exe = FindLibreTranslateExe();
             if (exe == null)
             {
                 onStatusUpdate?.Invoke("LibreTranslate no instalado (pip install libretranslate)");
