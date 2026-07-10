@@ -43,6 +43,10 @@ namespace WindowsLiveCaptionsReader
                 new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
         private CancellationTokenSource? _generationCts;
         private readonly CancellationTokenSource _pipelineShutdown = new();
+        // Per-request safety net: don't rely on HttpClient's 120s global timeout
+        private static readonly TimeSpan QuestionGenerationTimeout = TimeSpan.FromSeconds(45);
+        private static readonly TimeSpan AutoTranslateTimeout     = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan L4ClassificationTimeout  = TimeSpan.FromSeconds(15);
         private string _previousSentence = "";
 
         // ─── Session ──────────────────────────────────────────────────────────
@@ -288,7 +292,8 @@ namespace WindowsLiveCaptionsReader
                     {
                         try
                         {
-                            bool aiSays = await _questionService.IsQuestionViaAI(sentCapture);
+                            using var l4Cts = new CancellationTokenSource(L4ClassificationTimeout);
+                            bool aiSays = await _questionService.IsQuestionViaAI(sentCapture, l4Cts.Token);
                             if (aiSays)
                             {
                                 var aiResult = new QuestionDetectionResult
@@ -388,52 +393,85 @@ namespace WindowsLiveCaptionsReader
                 _ = _sessionService.SaveQuestionAsync(question);
             }
 
-            // Context analysis runs in background; EN options start immediately
-            var contextTask = _translator.StreamChatAsync(
-                "You are analyzing a classroom conversation. In 1-2 sentences explain WHY the teacher is " +
-                "asking this question — what topic or concept it connects to. Reply in Spanish only. Be concise.",
-                $"Context:\n{context}\n\nTeacher's question: \"{sentence}\"",
-                partial => Dispatcher.Invoke(() =>
-                {
-                    if (!token.IsCancellationRequested) QuestionContextText.Text = partial;
-                }),
-                token);
+            // Single structured request: context + EN options + ES translations in one
+            // generation, so LM Studio's queue is occupied once per question instead of 3 times
+            // and live translation isn't starved behind the assistant.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeoutCts.CancelAfter(QuestionGenerationTimeout);
+            var genToken = timeoutCts.Token;
 
-            string enOptions = await _translator.StreamChatAsync(
+            string systemPrompt =
                 $"You are an English tutor helping a {_englishLevel}-level student named {_userName}. " +
-                "Write EXACTLY 3 numbered response options the student can say to the teacher. " +
-                "ALL 3 options MUST be written in ENGLISH only — never use Spanish or any other language. " +
-                "Max 20 words per option. Return ONLY this format, nothing else:\n" +
-                "1. [English response]\n2. [English response]\n3. [English response]",
-                $"Context:\n{context}\n\nTeacher's question: \"{sentence}\"",
-                partial => Dispatcher.Invoke(() =>
-                {
-                    if (!token.IsCancellationRequested) ResponseEnText.Text = partial;
-                }),
-                token);
+                "The teacher just asked the student a question. Reply using EXACTLY this template, " +
+                "keeping the bracketed section headers:\n" +
+                "[CONTEXT]\n(1-2 sentences IN SPANISH explaining why the teacher asks this and what topic it connects to)\n" +
+                "[OPTIONS]\n1. (English response, max 20 words)\n2. (English response, max 20 words)\n3. (English response, max 20 words)\n" +
+                "[TRANSLATIONS]\n1. (Spanish translation of option 1)\n2. (Spanish translation of option 2)\n3. (Spanish translation of option 3)\n" +
+                "The 3 options MUST be in English only. Output nothing outside the template.";
 
-            token.ThrowIfCancellationRequested();
-
-            var esTask = _translator.StreamChatAsync(
-                "Translate the following numbered English response options into natural Spanish. " +
-                "ALL output MUST be in Spanish only — never include English. " +
-                "Keep the same numbering. Return ONLY the translated list, nothing else.",
-                enOptions,
-                partial => Dispatcher.Invoke(() =>
-                {
-                    if (!token.IsCancellationRequested) ResponseEsText.Text = partial;
-                }),
-                token);
-
-            await Task.WhenAll(contextTask, esTask);
-
-            token.ThrowIfCancellationRequested();
-
-            Dispatcher.Invoke(() =>
+            try
             {
-                ResponseStatus.Text           = DateTime.Now.ToString("HH:mm");
-                ResponseLoadingBar.Visibility = Visibility.Collapsed;
-            });
+                string full = await _translator.StreamChatAsync(
+                    systemPrompt,
+                    $"Context:\n{context}\n\nTeacher's question: \"{sentence}\"",
+                    partial =>
+                    {
+                        var (ctx, en, es) = ParseAssistantSections(partial);
+                        Dispatcher.InvokeAsync(() =>
+                        {
+                            if (genToken.IsCancellationRequested) return;
+                            if (ctx.Length > 0) QuestionContextText.Text = ctx;
+                            if (en.Length > 0)  ResponseEnText.Text      = en;
+                            if (es.Length > 0)  ResponseEsText.Text      = es;
+                        });
+                    },
+                    genToken);
+
+                genToken.ThrowIfCancellationRequested();
+
+                var (fCtx, fEn, fEs) = ParseAssistantSections(full);
+                Dispatcher.Invoke(() =>
+                {
+                    if (fCtx.Length == 0 && fEn.Length == 0 && fEs.Length == 0)
+                        ResponseEnText.Text = full;   // model ignored the template — show raw output
+                    else
+                    {
+                        if (fCtx.Length > 0) QuestionContextText.Text = fCtx;
+                        if (fEn.Length > 0)  ResponseEnText.Text      = fEn;
+                        if (fEs.Length > 0)  ResponseEsText.Text      = fEs;
+                    }
+                    ResponseStatus.Text           = DateTime.Now.ToString("HH:mm");
+                    ResponseLoadingBar.Visibility = Visibility.Collapsed;
+                });
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                // Timed out (not superseded by a newer question) — free the UI instead of hanging
+                Dispatcher.Invoke(() =>
+                {
+                    ResponseStatus.Text           = "⏱ tiempo agotado";
+                    ResponseLoadingBar.Visibility = Visibility.Collapsed;
+                });
+            }
+        }
+
+        // Splits the assistant's structured reply into its three UI sections.
+        // Tolerates partial streams: a section is empty until its header has arrived.
+        private static (string Ctx, string En, string Es) ParseAssistantSections(string text)
+        {
+            string ctx = ExtractSection(text, "[CONTEXT]", "[OPTIONS]");
+            string en  = ExtractSection(text, "[OPTIONS]", "[TRANSLATIONS]");
+            string es  = ExtractSection(text, "[TRANSLATIONS]", null);
+            return (ctx, en, es);
+        }
+
+        private static string ExtractSection(string text, string start, string? end)
+        {
+            int s = text.IndexOf(start, StringComparison.OrdinalIgnoreCase);
+            if (s < 0) return "";
+            s += start.Length;
+            int e = end == null ? -1 : text.IndexOf(end, s, StringComparison.OrdinalIgnoreCase);
+            return (e < 0 ? text[s..] : text[s..e]).Trim();
         }
 
         // ─── Manual chat input ────────────────────────────────────────────────
@@ -546,7 +584,7 @@ namespace WindowsLiveCaptionsReader
                 return;
 
             _autoTranslateCts?.Cancel();
-            _autoTranslateCts = new CancellationTokenSource();
+            _autoTranslateCts = new CancellationTokenSource(AutoTranslateTimeout);
             var token = _autoTranslateCts.Token;
 
             string snapshot = _autoTranslationBuffer;
@@ -620,7 +658,7 @@ namespace WindowsLiveCaptionsReader
 
             return await _translator.TranslateStreamAsync(
                 text,
-                partial => Dispatcher.Invoke(() =>
+                partial => Dispatcher.InvokeAsync(() =>
                 {
                     if (token.IsCancellationRequested) return;
                     TranslationText.Text = string.IsNullOrEmpty(snapshot)
