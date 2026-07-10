@@ -83,8 +83,8 @@ LM Studio is the only external dependency. Whisper is optional for microphone tr
 ### 1. Clone and build
 
 ```bash
-git clone https://github.com/CharlieCardenasToledo/WindowsLiveCaptionsRead.git
-cd WindowsLiveCaptionsRead
+git clone https://github.com/CharlieCardenasToledo/english-learning-assistant.git
+cd english-learning-assistant
 dotnet build
 dotnet run
 ```

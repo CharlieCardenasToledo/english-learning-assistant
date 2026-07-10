@@ -83,8 +83,8 @@ LM Studio es la única dependencia externa. Whisper es opcional para transcripci
 ### 1. Clonar y compilar
 
 ```bash
-git clone https://github.com/CharlieCardenasToledo/WindowsLiveCaptionsRead.git
-cd WindowsLiveCaptionsRead
+git clone https://github.com/CharlieCardenasToledo/english-learning-assistant.git
+cd english-learning-assistant
 dotnet build
 dotnet run
 ```
