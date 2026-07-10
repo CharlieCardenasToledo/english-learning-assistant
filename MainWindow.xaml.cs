@@ -48,6 +48,9 @@ namespace WindowsLiveCaptionsReader
         // Cancelled only by explicit user actions (clear panel / shutdown), never by
         // newly detected questions — those wait in the queue instead.
         private CancellationTokenSource? _currentGenerationAbort;
+        private TextBlock? _currentEnText;
+        private TextBlock? _currentEsText;
+        private TextBlock? _currentCtxText;
         // While an answer is being generated, live translation via LM Studio is paused
         // (sentences buffer up and are translated in one batch afterwards) so the LLM
         // is fully dedicated to answering. LibreTranslate route is never paused.
@@ -409,11 +412,15 @@ namespace WindowsLiveCaptionsReader
                 QuestionBadge.Text             = (isForced ? "✏️ Manual" : $"❓ {qResult.Confidence:P0}")
                                                + (queued > 0 ? $" · {queued} en cola" : "");
                 QuestionBadgeBorder.Visibility = Visibility.Visible;
-                QuestionContextText.Text       = "…";
-                ResponseEnText.Text            = "Generando opciones...";
-                ResponseEsText.Text            = "...";
                 ResponseStatus.Text            = "";
                 ResponseLoadingBar.Visibility  = Visibility.Visible;
+
+                _currentEnText  = AppendAnswerBlock(ResponseEnStack,  ResponseScrollViewer,  sentence, "Generando opciones...",
+                    new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xD7, 0x00)), 13);
+                _currentEsText  = AppendAnswerBlock(ResponseEsStack,  ResponseEsScrollViewer, sentence, "...",
+                    System.Windows.Media.Brushes.White, 13);
+                _currentCtxText = AppendAnswerBlock(QuestionContextStack, QuestionContextScrollViewer, sentence, "…",
+                    new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(0xBB, 0xCC, 0xE8, 0xFF)), 12, italic: true);
             });
 
             // Persist detected question to DB
@@ -467,9 +474,9 @@ namespace WindowsLiveCaptionsReader
                         Dispatcher.InvokeAsync(() =>
                         {
                             if (genToken.IsCancellationRequested) return;
-                            if (ctx.Length > 0) QuestionContextText.Text = ctx;
-                            if (en.Length > 0)  ResponseEnText.Text      = en;
-                            if (es.Length > 0)  ResponseEsText.Text      = es;
+                            if (ctx.Length > 0 && _currentCtxText != null) _currentCtxText.Text = ctx;
+                            if (en.Length > 0  && _currentEnText  != null) _currentEnText.Text  = en;
+                            if (es.Length > 0  && _currentEsText  != null) _currentEsText.Text  = es;
                         });
                     },
                     genToken,
@@ -481,8 +488,8 @@ namespace WindowsLiveCaptionsReader
                         lastShownSecond = sec;
                         Dispatcher.InvokeAsync(() =>
                         {
-                            if (!genToken.IsCancellationRequested)
-                                ResponseEnText.Text = $"🤔 el modelo está razonando… ({sec}s)";
+                            if (!genToken.IsCancellationRequested && _currentEnText != null)
+                                _currentEnText.Text = $"🤔 el modelo está razonando… ({sec}s)";
                         });
                     });
 
@@ -492,12 +499,14 @@ namespace WindowsLiveCaptionsReader
                 Dispatcher.Invoke(() =>
                 {
                     if (fCtx.Length == 0 && fEn.Length == 0 && fEs.Length == 0)
-                        ResponseEnText.Text = full;   // model ignored the template — show raw output
+                    {
+                        if (_currentEnText != null) _currentEnText.Text = full;
+                    }
                     else
                     {
-                        if (fCtx.Length > 0) QuestionContextText.Text = fCtx;
-                        if (fEn.Length > 0)  ResponseEnText.Text      = fEn;
-                        if (fEs.Length > 0)  ResponseEsText.Text      = fEs;
+                        if (fCtx.Length > 0 && _currentCtxText != null) _currentCtxText.Text = fCtx;
+                        if (fEn.Length > 0  && _currentEnText  != null) _currentEnText.Text  = fEn;
+                        if (fEs.Length > 0  && _currentEsText  != null) _currentEsText.Text  = fEs;
                     }
                     ResponseStatus.Text           = DateTime.Now.ToString("HH:mm");
                     ResponseLoadingBar.Visibility = Visibility.Collapsed;
@@ -512,6 +521,50 @@ namespace WindowsLiveCaptionsReader
                     ResponseLoadingBar.Visibility = Visibility.Collapsed;
                 });
             }
+        }
+
+        // Appends a new answer card to a StackPanel and returns the TextBlock that will receive the answer text.
+        // Hides the placeholder on first use. Scrolls to bottom so the newest answer is visible.
+        private TextBlock AppendAnswerBlock(
+            StackPanel stack, ScrollViewer scroller,
+            string question, string placeholder,
+            System.Windows.Media.Brush fg, double fontSize, bool italic = false)
+        {
+            // Hide placeholder (it's always the first child when present)
+            if (stack.Children.Count == 1 && stack.Children[0] is TextBlock ph && (ph.Opacity < 1 || ph.Name.Contains("Placeholder")))
+                ph.Visibility = Visibility.Collapsed;
+            else if (stack.Children.Count > 0)
+                stack.Children.Add(new Border
+                {
+                    Height = 1,
+                    Margin = new Thickness(0, 8, 0, 6),
+                    Background = new System.Windows.Media.SolidColorBrush(
+                        System.Windows.Media.Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF))
+                });
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = question,
+                FontSize = 10,
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromArgb(0x80, 0xFF, 0xFF, 0xFF)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 3)
+            });
+
+            var tb = new TextBlock
+            {
+                Text = placeholder,
+                Foreground = fg,
+                FontSize = fontSize,
+                FontFamily = new System.Windows.Media.FontFamily("Segoe UI"),
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = fontSize < 13 ? 18 : 20,
+                FontStyle = italic ? FontStyles.Italic : FontStyles.Normal,
+            };
+            stack.Children.Add(tb);
+            scroller.ScrollToBottom();
+            return tb;
         }
 
         // Splits the assistant's structured reply into its three UI sections.
@@ -836,20 +889,20 @@ namespace WindowsLiveCaptionsReader
 
         private void CopyEnOptions_Click(object sender, RoutedEventArgs e)
         {
-            if (!string.IsNullOrWhiteSpace(ResponseEnText.Text)
-                && !ResponseEnText.Text.StartsWith("Las opciones"))
+            string? text = _currentEnText?.Text;
+            if (!string.IsNullOrWhiteSpace(text) && !text.StartsWith("Generando"))
             {
-                Clipboard.SetText(ResponseEnText.Text);
+                Clipboard.SetText(text);
                 ShowCopyFeedback();
             }
         }
 
         private void CopyEsOptions_Click(object sender, RoutedEventArgs e)
         {
-            if (!string.IsNullOrWhiteSpace(ResponseEsText.Text)
-                && !ResponseEsText.Text.StartsWith("Las opciones"))
+            string? text = _currentEsText?.Text;
+            if (!string.IsNullOrWhiteSpace(text) && text != "...")
             {
-                Clipboard.SetText(ResponseEsText.Text);
+                Clipboard.SetText(text);
                 ShowCopyFeedback();
             }
         }
@@ -1226,12 +1279,20 @@ namespace WindowsLiveCaptionsReader
             TranslationText.Text    = "";
             TranslationStatus.Text  = "";
             QuestionText.Text        = "Esperando pregunta del profesor...";
-            QuestionContextText.Text = "El contexto de la pregunta aparecerá aquí...";
-            ResponseEnText.Text      = "Las opciones aparecerán al detectar una pregunta...";
-            ResponseEsText.Text      = "Las opciones en español aparecerán aquí...";
             ResponseStatus.Text      = "";
             ResponseLoadingBar.Visibility  = Visibility.Collapsed;
             QuestionBadgeBorder.Visibility = Visibility.Collapsed;
+
+            ResponseEnStack.Children.Clear();
+            ResponseEnStack.Children.Add(ResponseEnPlaceholder);
+            ResponseEsStack.Children.Clear();
+            ResponseEsStack.Children.Add(ResponseEsPlaceholder);
+            QuestionContextStack.Children.Clear();
+            QuestionContextStack.Children.Add(QuestionContextPlaceholder);
+
+            _currentEnText  = null;
+            _currentEsText  = null;
+            _currentCtxText = null;
         }
 
         private void ToggleHistory_Click(object sender, RoutedEventArgs e) { }

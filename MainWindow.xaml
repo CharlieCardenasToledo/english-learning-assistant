@@ -321,12 +321,13 @@
                         <ScrollViewer Grid.Row="4" x:Name="QuestionContextScrollViewer"
                                       VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled">
-                            <TextBlock x:Name="QuestionContextText"
-                                       Text="El contexto de la pregunta aparecerá aquí..."
-                                       Foreground="#BBCCE8FF" FontSize="12"
-                                       FontFamily="Segoe UI" TextWrapping="Wrap"
-                                       FontStyle="Italic"
-                                       Margin="16,4,16,8" LineHeight="18"/>
+                            <StackPanel x:Name="QuestionContextStack" Margin="16,4,16,8">
+                                <TextBlock x:Name="QuestionContextPlaceholder"
+                                           Text="El contexto de la pregunta aparecerá aquí..."
+                                           Foreground="#BBCCE8FF" FontSize="12"
+                                           FontFamily="Segoe UI" TextWrapping="Wrap"
+                                           FontStyle="Italic" LineHeight="18" Opacity="0.5"/>
+                            </StackPanel>
                         </ScrollViewer>
 
                         <!-- Divider before chat -->
@@ -413,11 +414,13 @@
                         <ScrollViewer Grid.Row="3" x:Name="ResponseScrollViewer"
                                       VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled">
-                            <TextBlock x:Name="ResponseEnText"
-                                       Text="Las opciones aparecerán al detectar una pregunta..."
-                                       Foreground="#FFD700" FontSize="13"
-                                       FontFamily="Segoe UI" TextWrapping="Wrap"
-                                       Margin="16,2,16,6" LineHeight="20"/>
+                            <StackPanel x:Name="ResponseEnStack" Margin="16,2,16,6">
+                                <TextBlock x:Name="ResponseEnPlaceholder"
+                                           Text="Las opciones aparecerán al detectar una pregunta..."
+                                           Foreground="#FFD700" FontSize="13"
+                                           FontFamily="Segoe UI" TextWrapping="Wrap"
+                                           LineHeight="20" Opacity="0.5"/>
+                            </StackPanel>
                         </ScrollViewer>
 
                         <!-- Inner divider -->
@@ -438,11 +441,13 @@
                         <ScrollViewer Grid.Row="6" x:Name="ResponseEsScrollViewer"
                                       VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled">
-                            <TextBlock x:Name="ResponseEsText"
-                                       Text="Las opciones en español aparecerán aquí..."
-                                       Foreground="White" FontSize="13"
-                                       FontFamily="Segoe UI" TextWrapping="Wrap"
-                                       Margin="16,2,16,6" LineHeight="20"/>
+                            <StackPanel x:Name="ResponseEsStack" Margin="16,2,16,6">
+                                <TextBlock x:Name="ResponseEsPlaceholder"
+                                           Text="Las opciones en español aparecerán aquí..."
+                                           Foreground="White" FontSize="13"
+                                           FontFamily="Segoe UI" TextWrapping="Wrap"
+                                           LineHeight="20" Opacity="0.5"/>
+                            </StackPanel>
                         </ScrollViewer>
                     </Grid>
                 </Border>
