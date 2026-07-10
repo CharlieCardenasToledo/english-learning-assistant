@@ -20,7 +20,12 @@ PLAN_IMPLEMENTACION_NIELSEN.md
 PLAN_MEJORAS_ASISTENTE.md
 GUIA_EJECUCION.md
 Class_Summary_*.md
+Resumen_Clase_*.md
 *.db
 .claude/
 output/
 installer/
+publish/
+CLAUDE.md
+.rtfm/
+image copy.png

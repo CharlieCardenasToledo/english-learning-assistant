@@ -1,345 +1,235 @@
-# 🎓 Windows Live Captions Reader - English Learning Assistant
+# English Learning Assistant
 
-[![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
-[![WPF](https://img.shields.io/badge/WPF-Windows-0078D4?logo=windows)](https://docs.microsoft.com/en-us/dotnet/desktop/wpf/)
-[![Ollama](https://img.shields.io/badge/Ollama-AI-000000?logo=ai)](https://ollama.ai/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
+[![WPF](https://img.shields.io/badge/WPF-Windows-0078D4?logo=windows&logoColor=white)](https://docs.microsoft.com/en-us/dotnet/desktop/wpf/)
+[![LM Studio](https://img.shields.io/badge/LM_Studio-local_AI-6B4FBB?logoColor=white)](https://lmstudio.ai/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows_10%2F11-0078D4?logo=windows)](https://www.microsoft.com/windows)
 
-> **AI-powered English learning assistant** that captures live conversations, provides real-time translations, and generates intelligent response suggestions for B1 level students.
+> Real-time AI assistant for English learners. Captures live captions, translates to Spanish automatically, detects teacher questions, and generates contextual response suggestions — all running locally on your machine.
 
 **English | [Español](README.es.md)**
 
 ---
 
-## 📋 Table of Contents
-
-- [Features](#-features)
-- [Prerequisites](#-prerequisites)
-- [Installation](#-installation)
-- [Usage](#-usage)
-- [How It Works](#-how-it-works)
-- [Configuration](#-configuration)
-- [Keyboard Shortcuts](#-keyboard-shortcuts)
-- [Troubleshooting](#-troubleshooting)
-- [Contributing](#-contributing)
-- [License](#-license)
+![App screenshot](image.png)
 
 ---
 
-## ✨ Features
+## How it works
 
-### 🎤 **Multi-Source Audio Capture**
-- **Windows Live Captions**: Automatically captures system-wide subtitles
-- **Microphone Input**: Records your spoken responses via speech recognition
-- **Browser Integration**: Extracts text from web pages using Chrome DevTools Protocol (CDP)
+The app runs as a transparent overlay on top of any other window (Zoom, Teams, your browser). It reads the text that Windows Live Captions is transcribing and:
 
-### 🤖 **AI-Powered Learning Assistant**
-- **Intelligent Response Suggestions**: Generates 3 contextual responses (2-4 sentences each)
-- **Grammar Explanations**: Provides Spanish explanations of grammar usage
-- **Vocabulary Support**: Highlights key words with definitions
-- **Spanish Translations**: Full translations for better comprehension
-- **B1 Level Optimized**: Responses tailored for CEFR B1 proficiency
+1. **Displays** the English transcription in real time (top-left)
+2. **Translates** each sentence to Spanish automatically (top-right)
+3. **Detects** when the teacher asks a question using a 4-level cascade (bottom-left)
+4. **Generates** 3 response options in English + Spanish via LM Studio (bottom-right)
 
-### 📊 **Conversation Management**
-- **Real-time Translation**: Instant Spanish translations of captured English text
-- **Conversation History**: Tracks teacher and student interactions
-- **Context-Aware**: Uses last 5 conversations for intelligent suggestions
-- **Class Summaries**: Generates structured markdown summaries with key topics, vocabulary, and action items
-
-### 🎨 **Modern UI/UX**
-- **Glassmorphism Design**: Beautiful, modern interface with transparency effects
-- **Customizable Opacity**: Adjustable window transparency
-- **Always-on-Top Mode**: Stays visible during exams or practice sessions
-- **Resizable Windows**: Flexible layout for different screen sizes
-- **Dark Theme**: Eye-friendly design for extended use
+Everything runs locally — no data leaves your machine.
 
 ---
 
-## 📦 Prerequisites
+## Features
 
-### Required Software
+### Real-time transcription and translation
+- Reads Windows Live Captions via UI Automation — no audio processing required
+- Auto-translates every committed sentence to Spanish using LM Studio
+- Fallback to LibreTranslate (local server) when available for faster translation
+- Manual microphone input as a secondary source
 
-1. **Windows 10/11** (with Live Captions support)
-2. **.NET 8.0 SDK** or later
-   ```bash
-   winget install Microsoft.DotNet.SDK.8
-   ```
+### Intelligent question detection
+- **L1** — Explicit question mark (confidence 0.95)
+- **L2** — WH-word or auxiliary verb at sentence start (0.80–0.85)
+- **L2b** — Tag questions like "right?", "isn't it?" (0.85)
+- **L3** — Indirect starters like "I wonder…", "I'd like to know…" (0.70)
+- **L4** — LM Studio classifier for ambiguous cases (0.75)
+- Username detection: boosts confidence when your name appears in the sentence
+- Fragmentation retry: combines current and previous sentence when detection is uncertain
 
-3. **Ollama** (Local AI server)
-   ```bash
-   # Download from https://ollama.ai/download
-   # Or install via winget:
-   winget install Ollama.Ollama
-   ```
+### AI response suggestions
+- Generates exactly 3 numbered options tailored to your CEFR level (A2–C1)
+- All options in English; Spanish translation rendered side-by-side
+- Context-aware: uses the last 15 lines of transcription as background
+- Streams tokens in real time — no waiting for the full response
 
-4. **Ollama Model** (llama3.2 recommended)
-   ```bash
-   ollama pull llama3.2
-   ```
+### Session management
+- Every class is saved as a session in a local SQLite database
+- Sessions include transcription entries, detected questions, and AI-generated summaries
+- Resume a previous session with a single click
+- Export any session to Markdown
 
-### Optional (for Browser Integration)
-
-5. **Google Chrome** (for CDP integration)
-6. **Selenium WebDriver** (included via NuGet)
-
----
-
-## 📥 Download & Install (For End Users)
-
-### Quick Install (Recommended for Non-Technical Users)
-
-**Option 1: Automatic Installer (PowerShell)**
-1. Download the project ZIP from GitHub
-2. Extract to a folder
-3. Right-click `INSTALAR.ps1` → "Run with PowerShell"
-4. Follow the on-screen instructions
-
-**Option 2: Portable Installer (Coming Soon)**
-- Download `EnglishLearningAssistant-v1.0-Portable.zip` from [Releases](https://github.com/CharlieCardenasToledo/WindowsLiveCaptionsRead/releases)
-- Extract and run `INSTALAR.bat`
-
-**Option 3: Self-Extracting Installer (Coming Soon)**
-- Download `EnglishLearningAssistant-v1.0-Setup.exe` from [Releases](https://github.com/CharlieCardenasToledo/WindowsLiveCaptionsRead/releases)
-- Run the installer
-
-📖 **Detailed Installation Guide**: See [INSTALACION.md](INSTALACION.md)
+### Vocabulary manager
+- Add words with translation, definition, and CEFR level
+- Analyze clipboard text to extract vocabulary automatically
+- Search and delete entries
 
 ---
 
-## 🚀 Installation (For Developers)
+## Requirements
 
-### 1. Clone the Repository
+| Component | Details |
+|-----------|---------|
+| **OS** | Windows 10 22H2+ or Windows 11 (Live Captions requires this) |
+| **.NET** | .NET 8.0 runtime or SDK |
+| **LM Studio** | Any version — must be running with a model loaded |
+| **Windows Live Captions** | Enable with `Win + Ctrl + L` |
+
+LM Studio is the only external dependency. Whisper is optional for microphone transcription and is not required for the main workflow.
+
+---
+
+## Getting started
+
+### 1. Clone and build
+
 ```bash
-git clone https://github.com/YOUR_USERNAME/WindowsLiveCaptionsReader.git
-cd WindowsLiveCaptionsReader
-```
-
-### 2. Restore Dependencies
-```bash
-dotnet restore
-```
-
-### 3. Build the Project
-```bash
+git clone https://github.com/CharlieCardenasToledo/WindowsLiveCaptionsRead.git
+cd WindowsLiveCaptionsRead
 dotnet build
-```
-
-### 4. Run the Application
-```bash
 dotnet run
 ```
 
----
+### 2. Start LM Studio
 
-## 📖 Usage
+Open LM Studio, load any model (Gemma, Llama, Mistral, etc.), and start the local server. The app detects it automatically.
 
-### Basic Workflow
+### 3. Enable Windows Live Captions
 
-1. **Start Ollama Server**
-   ```bash
-   ollama serve
-   ```
-   *(The app will attempt to start it automatically if not running)*
+Press `Win + Ctrl + L` — a caption bar appears at the top or bottom of your screen. The app reads from it via UI Automation.
 
-2. **Enable Windows Live Captions**
-   - Press `Win + Ctrl + L` to toggle Live Captions
-   - Or go to Settings → Accessibility → Captions
+### First run vs. subsequent runs
 
-3. **Launch the Application**
-   ```bash
-   dotnet run
-   ```
-
-4. **Start Capturing**
-   - The app automatically listens to Live Captions
-   - Enable microphone with the 🎤 button to capture your speech
-   - Use the 🌐 button to scan browser content
-
-5. **Get AI Assistance**
-   - Press `Ctrl + Space` to open the AI Assistant
-   - View 3 intelligent response suggestions with explanations
-   - Click "Refresh Analysis" to regenerate suggestions
-
-### Advanced: Browser Integration (High-Fidelity Mode)
-
-For better browser text extraction:
-
-1. **Run Chrome in Debug Mode**
-   ```bash
-   .\LANZAR_MODO_EXAMEN.bat
-   ```
-   *(This launches Chrome with remote debugging enabled)*
-
-2. **Click the 🌐 Browser Scan button**
-   - The app will connect via CDP for accurate DOM extraction
-   - Fallback to UI Automation if CDP is unavailable
+On the **first run**, a setup wizard checks your LM Studio connection and lets you optionally download a Whisper model for microphone input. On **subsequent runs**, the wizard is skipped and the app opens directly in the overlay.
 
 ---
 
-## 🔧 How It Works
-
-### Architecture Overview
+## UI layout
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Main Window (WPF)                       │
-├─────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
-│  │ Live Captions│  │  Microphone  │  │   Browser    │     │
-│  │   Reader     │  │   Capture    │  │   Scanner    │     │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     │
-│         │                  │                  │             │
-│         └──────────────────┴──────────────────┘             │
-│                            │                                │
-│                    ┌───────▼────────┐                       │
-│                    │ Ollama Service │                       │
-│                    │  (Translation  │                       │
-│                    │  & Suggestions)│                       │
-│                    └───────┬────────┘                       │
-│                            │                                │
-│                    ┌───────▼────────┐                       │
-│                    │   Assistant    │                       │
-│                    │     Window     │                       │
-│                    └────────────────┘                       │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  LIVE  Sesión 21 may, 14:03          [Asistente] [Vocab] [Mic]  │
+├──────────────────────────┬───────────────────────────────────────┤
+│  EN  TRANSCRIPCIÓN       │  ES  TRADUCCIÓN                       │
+│                          │                                       │
+│  Live captions text      │  Traducción automática                │
+│  appears here in         │  aparece aquí en                      │
+│  real time               │  tiempo real                          │
+├──────────────────────────┼───────────────────────────────────────┤
+│  PREGUNTA DETECTADA      │  OPCIONES DE RESPUESTA                │
+│                          │  EN                                   │
+│  ❓ 85%  Question text   │  1. First option...                   │
+│                          │  2. Second option...                  │
+│  CONTEXTO                │  3. Third option...                   │
+│  Context from class      │  ES                                   │
+│                          │  1. Primera opción...                 │
+│  [Manual input box  →]   │  2. Segunda opción...                 │
+├──────────────────────────┴───────────────────────────────────────┤
+│  [Traducir]  [Limpiar]  [Resumen]                               │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### AI Response Generation
-
-The assistant uses a sophisticated prompt to generate educational responses:
-
-```
-Context: Last 5 conversations (Teacher/Student)
-↓
-Ollama AI (llama3.2)
-↓
-3 Response Suggestions:
-  ├─ 2-4 complete sentences
-  ├─ 📝 Grammar explanation (Spanish)
-  ├─ 📚 Key vocabulary with definitions
-  └─ 🇪🇸 Full Spanish translation
-```
+The window is a full-screen transparent overlay. Drag by the header to move. Adjust opacity in Settings.
 
 ---
 
-## ⚙️ Configuration
-
-### Change AI Model
-
-Edit `MainWindow.xaml.cs` (line 38):
-```csharp
-_translator = new OllamaService("llama3.2"); // Change model here
-```
-
-Available models:
-- `llama3.2` (default, recommended)
-- `llama3.1`
-- `deepseek-r1`
-- Any Ollama-compatible model
-
-### Adjust Response Temperature
-
-Edit `Services/OllamaService.cs` (line 239):
-```csharp
-temperature = 0.7  // Higher = more creative, Lower = more focused
-```
-
-### Modify Context Window
-
-Edit `MainWindow.xaml.cs` (line 487):
-```csharp
-var recentItems = History.TakeLast(5)  // Change 5 to desired number
-```
-
----
-
-## ⌨️ Keyboard Shortcuts
+## Keyboard shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl + Space` | Toggle AI Assistant |
-| `Esc` | Close Settings or Overlay |
-| `Win + Ctrl + L` | Toggle Windows Live Captions |
+| `Ctrl + Space` | Toggle AI Assistant panel |
+| `Ctrl + T` | Translate full transcription manually |
+| `Ctrl + M` | Pause / Resume Live Captions capture |
+| `Ctrl + Shift + C` | Clear all panels |
+| `Esc` | Close any open overlay (Settings / Sessions / Assistant) |
+| `Win + Ctrl + L` | Toggle Windows Live Captions (system shortcut) |
 
 ---
 
-## 🐛 Troubleshooting
+## Project structure
 
-### Ollama Not Connecting
-
-**Error**: "Could not start Ollama"
-
-**Solution**:
-```bash
-# Manually start Ollama
-ollama serve
-
-# Verify it's running
-curl http://localhost:11434
+```
+WindowsLiveCaptionsReader/
+├── Services/
+│   ├── CaptionReader.cs              # UI Automation reader for Live Captions
+│   ├── CaptionPipeline.cs            # Sentence accumulation state machine
+│   ├── LmStudioService.cs            # LM Studio API client (OpenAI-compatible)
+│   ├── QuestionDetectionService.cs   # 4-level detection cascade (L1–L4)
+│   ├── SessionService.cs             # SQLite session persistence (EF Core)
+│   ├── VocabularyService.cs          # Vocabulary CRUD
+│   ├── AudioCaptureService.cs        # Microphone input (NAudio)
+│   ├── LibreTranslateService.cs      # Local LibreTranslate fallback
+│   ├── WhisperService.cs             # Optional Whisper transcription
+│   └── AppLogger.cs                  # File-based logger
+├── Models/                           # EF Core entities
+├── MainWindow.xaml / .cs             # 4-quadrant overlay
+├── SetupWindow.xaml / .cs            # First-run wizard
+├── VocabularyWindow.xaml / .cs       # Vocabulary manager
+└── WindowsLiveCaptionsReader.Tests/  # xUnit test suite (36 tests, L1–L3)
 ```
 
-### Microphone Not Working
+---
 
-**Error**: "No Speech Recognizer found"
+## Architecture note
 
-**Solution**:
-1. Install English (US) language pack in Windows
-2. Go to Settings → Time & Language → Language
-3. Add "English (United States)"
-4. Download speech recognition
+Question detection and AI generation are decoupled via a bounded `Channel<QuestionJob>`:
 
-### Browser Scan Returns Empty
+```
+CaptionPipeline.Feed()
+  └── ProcessSentenceAsync()     L1-L3 regex detection (<1 ms, no LLM)
+        ├── confidence >= 0.70   cancel in-flight generation, enqueue
+        ├── confidence 0.60-0.69 show badge, run L4-AI via TryWrite
+        └── not a question       discard
 
-**Error**: "CDP Empty Result" or "Legacy Scan Failed"
+Channel<QuestionJob> (capacity=1, DropOldest)
+  └── RunQuestionWorkerAsync()   single consumer, lifetime of window
+        └── GenerateResponseAsync() streams context + EN options + ES translation
+```
 
-**Solution**:
-1. Close all Chrome instances
-2. Run `LANZAR_MODO_EXAMEN.bat` from project folder
-3. Navigate to your exam/webpage
-4. Click 🌐 Browser Scan button
-
-### AI Responses Are Too Generic
-
-**Issue**: Suggestions don't match conversation context
-
-**Solution**:
-- Ensure conversation history has at least 3-5 exchanges
-- Don't clear history during active conversations
-- Check that Ollama is using the correct model
+A new high-confidence question always cancels the current generation. L4-AI results never interrupt an ongoing response.
 
 ---
 
-## 🤝 Contributing
+## Configuration
 
-Contributions are welcome! Please follow these steps:
+Settings are saved to `%LOCALAPPDATA%\EnglishLearningAssistant\settings.json`:
+
+```json
+{
+  "userName": "Charlie",
+  "englishLevel": "B1",
+  "lmStudioModel": "google/gemma-4-e4b"
+}
+```
+
+Change name, level, and model via the **Settings** panel in the app. No restart required.
+
+---
+
+## Troubleshooting
+
+**Nothing appears in the transcription panel**
+Enable Windows Live Captions with `Win + Ctrl + L`. The app reads from the captions window via UI Automation — if nothing appears after 10 seconds, try toggling captions off and on.
+
+**LM Studio not connecting**
+Open LM Studio, load a model, start the local server, then click the refresh button next to the model selector in Settings.
+
+**Question not detected**
+The cascade requires at least 3 words. For ambiguous cases, type the question manually in the input box at the bottom of the "Pregunta detectada" panel and press Enter.
+
+**Translation not appearing**
+Translation runs automatically on each committed sentence. Check the status label next to "TRADUCCIÓN" for error messages.
+
+---
+
+## Contributing
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch: `git checkout -b feat/your-feature`
+3. Run the test suite: `dotnet test WindowsLiveCaptionsReader.Tests/`
+4. Commit with a clear message and open a Pull Request
 
 ---
 
-## 📄 License
+## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- **Ollama** - Local AI inference
-- **Windows Live Captions** - System-wide speech recognition
-- **Selenium WebDriver** - Browser automation
-- **NAudio** - Audio capture library
-
----
-
-## 📧 Contact
-
-For questions or support, please open an issue on GitHub.
-
----
-
-**Made with ❤️ for English learners preparing for B1 certification**
+[MIT](LICENSE) — Charlie Cardenas Toledo, 2026
