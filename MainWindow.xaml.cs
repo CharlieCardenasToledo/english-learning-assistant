@@ -1,11 +1,17 @@
 using System;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using Microsoft.Win32;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -16,422 +22,847 @@ namespace WindowsLiveCaptionsReader
 {
     public partial class MainWindow : Window
     {
+        // ─── Services ─────────────────────────────────────────────────────────
         private CaptionReader _reader;
-        private OllamaService _translator;
+        private LmStudioService _translator;
         private AudioCaptureService _micService;
-        
-        // New Services for Manual Mode
-        private AudioRecorderService _audioRecorder;
-        private WhisperService _whisper;
-        
-        // Session Management
         private SessionService _sessionService;
-        private Session _currentSession;
-
         private QuestionDetectionService _questionService;
         private VocabularyService _vocabularyService;
+        private readonly LibreTranslateService _libreTranslate = new();
+        private readonly Services.BrowserCaptureService _browserScanner = new();
+        private readonly Services.ChromeSessionService  _chromeService  = new();
 
-        
-        // State flags
+        // ─── Pipeline ─────────────────────────────────────────────────────────
+        private readonly CaptionPipeline _captions = new();
+
+        // Question pipeline: detection is cheap (L1-L3); generation queued via Channel.
+        // A new question cancels in-flight generation — but non-question sentences never do.
+        private readonly Channel<QuestionJob> _questionChannel =
+            Channel.CreateBounded<QuestionJob>(
+                new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
+        private CancellationTokenSource? _generationCts;
+        private readonly CancellationTokenSource _pipelineShutdown = new();
+        private string _previousSentence = "";
+
+        // ─── Session ──────────────────────────────────────────────────────────
+        private Session? _currentSession;
+
+        // ─── User settings ────────────────────────────────────────────────────
+        private string _userName          = "Charlie";
+        private string _englishLevel      = "B1";
+        private string _lmStudioModelName = "google/gemma-4-e4b";
+        private static readonly string AppDataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "EnglishLearningAssistant");
+        private static readonly string SettingsPath = Path.Combine(AppDataDir, "settings.json");
+        private static readonly string LogPath      = Path.Combine(AppDataDir, "conversation_history.log");
+
+        // ─── UI state ─────────────────────────────────────────────────────────
         private bool _isPaused = false;
         private bool _isMicActive = false;
-        private bool _isRecordingMode = false; // False = Real-time (Live), True = Manual Recording
-        
-        // Debouncing logic
-        private DispatcherTimer _debounceTimer;
-        private CancellationTokenSource? _translationCts;
-        private string _pendingText = "";
-        
-        // Recording state
-        private string _tempAudioFile;
-        
+        private bool _isAssistantOpen = false;
+        private bool _isLmStudioOnline = false;
+
+        // ─── Auto-translation ─────────────────────────────────────────────────
+        private CancellationTokenSource? _autoTranslateCts;
+        private string _autoTranslationBuffer = "";
+        private const int MinWordsForAutoTranslate = 5;
+
+        // ─── LibreTranslate ───────────────────────────────────────────────────
+        private bool     _libreTranslateAvailable = false;
+        private DateTime _libreTranslateLastCheck = DateTime.MinValue;
+
+        // ─── Health monitoring ────────────────────────────────────────────────
+        private DispatcherTimer? _lmStudioHealthTimer;
+
+        // ─── History (UI) ─────────────────────────────────────────────────────
         public ObservableCollection<TranslationItem> History { get; set; }
+
+        // ─── Constructor ──────────────────────────────────────────────────────
 
         public MainWindow()
         {
             InitializeComponent();
-            
             History = new ObservableCollection<TranslationItem>();
-            HistoryList.ItemsSource = History;
-
-            _reader = new CaptionReader();
-            _translator = new OllamaService("llama3.2");
+            _translator = new LmStudioService("google/gemma-4-e4b");
             _micService = new AudioCaptureService();
-            
+
             try
             {
-                // Initialize new services
-                _audioRecorder = new AudioRecorderService();
-                _whisper = new WhisperService();
-                _sessionService = new SessionService();
+                _reader          = new CaptionReader();
+                _sessionService  = new SessionService();
                 _questionService = new QuestionDetectionService(_translator);
                 _vocabularyService = new VocabularyService(_translator);
-                _tempAudioFile = Path.Combine(Path.GetTempPath(), "ela_recording.wav");
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error initializing services: {ex.Message}\n\nStack: {ex.StackTrace}", "Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                // Handle or rethrow if fatal
+                AppLogger.Error("Startup initialization failed", ex);
+                MessageBox.Show($"Error inicializando servicios: {ex.Message}", "Error de inicio",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
 
-            _reader.TextChanged += Reader_TextChanged;
-            _reader.StatusChanged += Reader_StatusChanged;
-            
-            _micService.TextCaptured += (s, text) => Reader_TextChanged(s, text);
-            _micService.StatusChanged += (s, status) => 
+            if (_reader != null)
             {
-                Dispatcher.Invoke(() => {
-                     // Only show mic status in Live mode
-                     if (!_isRecordingMode && _isMicActive) StatusText.Text = $"Mic: {status}";
-                });
-            };
-            
+                _reader.TextChanged   += (s, text) => Reader_TextChanged(s, text);
+                _reader.StatusChanged += Reader_StatusChanged;
+            }
+
+            _micService.TextCaptured     += (s, text) => Reader_TextChanged(s, text);
+            _micService.StatusChanged    += (s, status) =>
+                Dispatcher.Invoke(() => { if (_isMicActive) StatusText.Text = $"Mic: {status}"; });
             _micService.AudioLevelChanged += (s, level) =>
-            {
-                Dispatcher.Invoke(() => {
-                    if (MicLevelBar != null) MicLevelBar.Value = level;
-                });
-            };
-            
-            // Debounce timer initialization
-            _debounceTimer = new DispatcherTimer();
-            _debounceTimer.Interval = TimeSpan.FromMilliseconds(500); // Increased to 500ms for sentence break
-            _debounceTimer.Tick += DebounceTimer_Tick;
+                Dispatcher.Invoke(() => { if (MicLevelBar != null) MicLevelBar.Value = level; });
 
             Loaded += MainWindow_Loaded;
-            Closed += MainWindow_Closed;
         }
 
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            try 
+            try
             {
-                _reader.Start();
-                
-                // Init database services
-                if (_sessionService != null) await _sessionService.InitializeAsync();
+                var workArea = SystemParameters.WorkArea;
+                Left   = workArea.Left;
+                Top    = workArea.Top;
+                Width  = workArea.Width;
+                Height = workArea.Height;
+
+                ApplyBlurBehind();
+                Directory.CreateDirectory(AppDataDir);
+                LoadSettings();
+                _translator.SetModel(_lmStudioModelName);
+
+                if (_sessionService   != null) await _sessionService.InitializeAsync();
                 if (_vocabularyService != null) await _vocabularyService.InitializeAsync();
-                
+
                 await EnsureServicesAreRunning();
+                _reader?.Start();
+
+                await CreateNewSessionAsync();
+                StartLmStudioHealthCheck();
+
+                // Start the question-generation worker (runs for the lifetime of the window)
+                _ = RunQuestionWorkerAsync(_pipelineShutdown.Token);
+
+                AppLogger.Info("Application started");
             }
             catch (Exception ex)
             {
-                 MessageBox.Show($"Error during async initialization: {ex.Message}", "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                AppLogger.Error("MainWindow_Loaded failed", ex);
+                MessageBox.Show($"Error durante la inicialización: {ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
-            await CreateNewSessionAsync();
-            
-            // Pre-load Whisper model in background to avoid delays later
-            _ = Task.Run(async () => 
-            {
-                try 
-                {
-                    await _whisper.InitializeAsync();
-                    Dispatcher.Invoke(() => StatusText.Text = "Whisper listo ✓");
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Whisper init error: {ex.Message}");
-                }
-            });
         }
 
         protected override void OnClosed(EventArgs e)
         {
-            _reader.Stop();
+            _pipelineShutdown.Cancel();
+            _generationCts?.Cancel();
+            _reader?.Stop();
             _micService.StopListening();
-            _audioRecorder.Dispose();
-            _whisper.Dispose();
-            _sessionService.Dispose();
-            _vocabularyService.Dispose();
-            _translationCts?.Cancel();
+            _sessionService?.Dispose();
+            _vocabularyService?.Dispose();
+            _libreTranslate.StopServer();
+            AppLogger.Info("Application closed");
             base.OnClosed(e);
         }
 
+        // ─── Service startup ──────────────────────────────────────────────────
+
         private async Task EnsureServicesAreRunning()
         {
-             // 1. Check Ollama Status
-             StatusText.Text = "Checking services...";
-             bool isRunning = await _translator.IsRunningAsync();
-             
-             if (!isRunning)
-             {
-                 StatusText.Text = "Starting Ollama...";
-                 TranslatedTextBlock.Text = "Attempting to start local Ollama server...";
-                 
-                 bool started = _translator.StartServer();
-                 if (started)
-                 {
-                     // Wait for it to spin up
-                     for(int i=0; i<5; i++)
-                     {
-                         await Task.Delay(1000); // Wait 1s
-                         if (await _translator.IsRunningAsync())
-                         {
-                             isRunning = true;
-                             break;
-                         }
-                     }
-                 }
-             }
+            StatusText.Text = "Verificando servicios...";
+            bool isRunning = await _translator.IsRunningAsync();
 
-             if (!isRunning)
-             {
-                 StatusText.Text = "Ollama Error";
-                 TranslatedTextBlock.Text = "Could not start Ollama. Please run 'ollama serve' manually.";
-             }
-             else
-             {
-                 StatusText.Text = "Ready";
-                 TranslatedTextBlock.Text = ""; // Clear warning
-             }
-        }
-
-        private void Window_KeyDown(object sender, KeyEventArgs e)
-        {
-            // Ctrl + Space -> Toggle Assistant
-            if (e.Key == Key.Space && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            if (!isRunning)
             {
-                Copilot_Click(this, new RoutedEventArgs());
+                StatusText.Text = "LM Studio offline";
+                TranslationText.Text = "Abre LM Studio, carga un modelo y vuelve a intentarlo.";
+
+                bool started = _translator.StartServer();
+                if (started)
+                {
+                    for (int i = 0; i < 5; i++)
+                    {
+                        await Task.Delay(1000);
+                        if (await _translator.IsRunningAsync()) { isRunning = true; break; }
+                    }
+                }
             }
-            // Esc -> Close Settings or Overlay
-            if (e.Key == Key.Escape)
+
+            if (!isRunning)
             {
-                if (SuggestionsOverlay.Visibility == Visibility.Visible)
-                    SuggestionsOverlay.Visibility = Visibility.Collapsed;
-                else if (SettingsPanel.Visibility == Visibility.Visible)
-                     SettingsPanel.Visibility = Visibility.Collapsed;
+                StatusText.Text = "LM Studio offline";
+                TranslationText.Text = "Abre LM Studio y carga un modelo para continuar.";
+                AppLogger.Warn("LM Studio not reachable at startup");
             }
-        }
-
-        private void MainWindow_Closed(object sender, EventArgs e)
-        {
-            _reader.Stop();
-        }
-
-        private void Reader_StatusChanged(object sender, string e)
-        {
-            Dispatcher.Invoke(() => 
+            else
             {
-                StatusText.Text = e;
+                StatusText.Text = "Listo";
+                TranslationText.Text = "";
+            }
+
+            _ = Task.Run(async () =>
+            {
+                bool ltReady = await _libreTranslate.EnsureRunningAsync(
+                    onStatusUpdate: msg => Dispatcher.InvokeAsync(() => TranslationStatus.Text = msg));
+                _libreTranslateAvailable = ltReady;
+                _libreTranslateLastCheck = DateTime.Now;
+                if (ltReady)
+                    Dispatcher.InvokeAsync(() => TranslationStatus.Text = "LibreTranslate ✓");
             });
         }
 
-        // Source tracking
-        private string _pendingSourceIcon = "\uE7F4"; // CC
-        private string _pendingSourceColor = "#CCCCFF"; 
+        // ─── Caption capture ──────────────────────────────────────────────────
+
+        private void Reader_StatusChanged(object sender, string e) =>
+            Dispatcher.Invoke(() => StatusText.Text = e);
 
         private void Reader_TextChanged(object sender, string text)
         {
             if (_isPaused || string.IsNullOrWhiteSpace(text)) return;
-
-            // Determine source based on sender
-            string sourceIcon = "\uE7F4"; // CC
-            string sourceColor = "#CCCCFF"; // Light Blue for System
-
-            if (sender is AudioCaptureService)
-            {
-                sourceIcon = "\uE720"; // Mic
-                sourceColor = "#90EE90"; // Light Green for Mic
-            }
-
-            Dispatcher.Invoke(() => 
-            {
-                // Visual feedback immediate
-                OriginalTextBlock.Text = text;
-                TranslatedTextBlock.Text = "..."; 
-                if (sender is AudioCaptureService) StatusText.Text = "Listening (Mic)...";
-                else StatusText.Text = "Listening (Sys)...";
-                
-                // Restart debounce timer
-                _pendingText = text;
-                _pendingSourceIcon = sourceIcon;
-                _pendingSourceColor = sourceColor;
-
-                _debounceTimer.Stop();
-                _debounceTimer.Start();
-            });
+            Dispatcher.Invoke(() => AppendCaption(text, sender is AudioCaptureService));
         }
 
-        private async void DebounceTimer_Tick(object? sender, EventArgs e)
+        private void AppendCaption(string newCaption, bool isMic = false)
         {
-            _debounceTimer.Stop();
-            string textToTranslate = _pendingText;
-            string currentIcon = _pendingSourceIcon;
-            string currentColor = _pendingSourceColor;
+            // Snapshot the pending sentence before Feed() commits it
+            string pendingSnapshot = _captions.Pending;
+            string? committed = _captions.Feed(newCaption);
 
-            // Update UI status
-            StatusText.Text = "Translating...";
+            if (committed != null)
+            {
+                _previousSentence = committed;
+                _ = ProcessSentenceAsync(committed);
+                _ = AutoTranslateSentenceAsync(committed);
+            }
 
-            // Cancel previous translation if any
-            _translationCts?.Cancel();
-            _translationCts = new CancellationTokenSource();
+            TranscriptionText.Text = _captions.GetDisplayText();
+            StatusText.Text = isMic ? "Mic..." : "Live Captions";
 
+            if (TranscriptionScrollViewer.VerticalOffset >= TranscriptionScrollViewer.ScrollableHeight - 40)
+                TranscriptionScrollViewer.ScrollToBottom();
+        }
+
+        // ─── Question detection pipeline ──────────────────────────────────────
+
+        // Runs on a thread-pool thread (fire-and-forget from AppendCaption).
+        // L1-L3 detection is regex-only (<1ms). L4-AI runs in the background
+        // without blocking this method or the generation worker.
+        private async Task ProcessSentenceAsync(string sentence)
+        {
             try
             {
-                // Streaming call (No context, just translate)
-                string finalTranslation = await _translator.TranslateStreamAsync(
-                    textToTranslate, 
-                    onPartialUpdate: (partial) => 
-                    {
-                        Dispatcher.Invoke(() => 
-                        {
-                            TranslatedTextBlock.Text = partial;
-                            TranslatedTextBlock.Foreground = System.Windows.Media.Brushes.LightGray;
-                        });
-                    },
-                    historyContext: null,
-                    token: _translationCts.Token);
-                
-                if (!_translationCts.Token.IsCancellationRequested)
+                // L1-L3 fast path — no LLM call
+                var result = await _questionService.AnalyzeWithConfidenceAsync(
+                    sentence, _userName, CancellationToken.None, skipAI: true);
+
+                // Fragmentation retry: combine with previous sentence if still uncertain
+                if (result.Confidence < 0.70f && !string.IsNullOrEmpty(_previousSentence))
                 {
-                    if (finalTranslation.StartsWith("[Error"))
+                    string combined = _previousSentence + " " + sentence;
+                    var combinedResult = await _questionService.AnalyzeWithConfidenceAsync(
+                        combined, _userName, CancellationToken.None, skipAI: true);
+                    if (combinedResult.Confidence > result.Confidence)
                     {
-                        TranslatedTextBlock.Text = finalTranslation;
-                        TranslatedTextBlock.Foreground = System.Windows.Media.Brushes.Red;
-                        StatusText.Text = "Translation Error";
+                        result   = combinedResult;
+                        sentence = combined;
                     }
-                    else if (!string.IsNullOrWhiteSpace(finalTranslation))
+                }
+
+                if (!result.IsQuestion) return;
+
+                if (result.Confidence >= 0.70f)
+                {
+                    // High confidence → cancel in-flight generation and queue the new question
+                    _generationCts?.Cancel();
+                    await _questionChannel.Writer.WriteAsync(new QuestionJob(sentence, result));
+                    ShowQuestionIndicator(result);
+                }
+                else if (result.Confidence >= 0.60f)
+                {
+                    // Medium confidence → show badge; run L4-AI in background
+                    ShowQuestionIndicator(result);
+                    string sentCapture = sentence;
+                    _ = Task.Run(async () =>
                     {
-                        TranslatedTextBlock.Text = finalTranslation;
-                        StatusText.Text = "Done";
-                        
-                        // Add to history
-                        AddToHistory(textToTranslate, finalTranslation, currentIcon, currentColor);
-                        
-                        // Save to DB
-                        var entry = new TranscriptionEntry
+                        try
                         {
-                            SessionId = _currentSession?.Id ?? 0,
-                            OriginalText = textToTranslate,
-                            TranslatedText = finalTranslation,
-                            Timestamp = DateTime.Now,
-                            Source = currentIcon == "\uE7F4" ? EntrySource.LiveCaption : EntrySource.Microphone, 
-                            ConfidenceScore = 1.0f 
-                        };
-                        
-                        if (_currentSession != null)
-                        {
-                            _currentSession.Entries.Add(entry);
-                            // Fire and forget save
-                            _ = _sessionService.SaveEntryAsync(entry);
-                        }
-
-                        // --- FASE 2: QUESTION DETECTION & AUTO-TRIGGER ---
-                        // Only auto-trigger if it came from "Teacher" (System)
-                        if (currentIcon == "\uE7F4")
-                        {
-                            var detectedQuestion = await _questionService.AnalyzeTextAsync(textToTranslate, _currentSession?.Id ?? 0, entry.Id);
-                            
-                            if (detectedQuestion != null)
+                            bool aiSays = await _questionService.IsQuestionViaAI(sentCapture);
+                            if (aiSays)
                             {
-                                entry.ContainsQuestion = true;
-                                if (_currentSession != null)
+                                var aiResult = new QuestionDetectionResult
                                 {
-                                    _currentSession.Questions.Add(detectedQuestion);
-                                    _ = _sessionService.SaveQuestionAsync(detectedQuestion);
-                                }
-                                
-                                // Show visual cue (optional console log for now)
-                                System.Diagnostics.Debug.WriteLine($"Question Detected: {detectedQuestion.Type} - {detectedQuestion.QuestionText}");
-
-                                // Auto-trigger Assistant (Phase 3.3)
-                                Dispatcher.Invoke(() => 
-                                {
-                                    string context = GetRecentContext();
-                                    
-                                    if (_assistantWindow == null || !_assistantWindow.IsLoaded)
-                                    {
-                                        _assistantWindow = new AssistantWindow(_translator, context, this);
-                                        _assistantWindow.Show();
-                                    }
-                                    else
-                                    {
-                                        _assistantWindow.Activate();
-                                    }
-
-                                    // Trigger specific question mode
-                                    _assistantWindow.UpdateContext(context, false);
-                                    _assistantWindow.ShowQuestionResponse(detectedQuestion.QuestionText, context);
-                                });
+                                    IsQuestion  = true,
+                                    Confidence  = 0.75f,
+                                    Type        = QuestionType.Indirect,
+                                    DetectedVia = "L4-AI"
+                                };
+                                // TryWrite (non-cancelling): don't interrupt an ongoing generation
+                                _questionChannel.Writer.TryWrite(new QuestionJob(sentCapture, aiResult));
                             }
                         }
-                    }
-                    else
+                        catch (Exception ex)
+                        {
+                            AppLogger.Error("[L4-AI] Classification failed", ex);
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[ProcessSentence] Detection failed", ex);
+            }
+        }
+
+        // Long-running task: reads from the question channel and generates responses.
+        // Only one response is generated at a time; new questions cancel the current one.
+        private async Task RunQuestionWorkerAsync(CancellationToken shutdownToken)
+        {
+            try
+            {
+                await foreach (var job in _questionChannel.Reader.ReadAllAsync(shutdownToken))
+                {
+                    _generationCts?.Cancel();
+                    _generationCts = new CancellationTokenSource();
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                        _generationCts.Token, shutdownToken);
+
+                    try
                     {
-                        // Fallback if empty
-                        TranslatedTextBlock.Text = "(Sin traducción)"; 
-                        StatusText.Text = "Empty Response";
-                        AddToHistory(textToTranslate, "(Sin traducción)", currentIcon, currentColor);
+                        await GenerateResponseAsync(job, linked.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Dispatcher.Invoke(() => ResponseLoadingBar.Visibility = Visibility.Collapsed);
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Error("[QuestionWorker] Generation failed", ex);
+                        Dispatcher.Invoke(() =>
+                        {
+                            ResponseLoadingBar.Visibility = Visibility.Collapsed;
+                            ResponseStatus.Text = $"err: {ex.Message[..Math.Min(60, ex.Message.Length)]}";
+                        });
                     }
                 }
             }
-            catch (TaskCanceledException) { }
-            catch (Exception ex)
-            {
-                StatusText.Text = "System Error";
-                TranslatedTextBlock.Text = $"Exception: {ex.Message}";
-                TranslatedTextBlock.Foreground = System.Windows.Media.Brushes.Red;
-            }
+            catch (OperationCanceledException) { }
         }
 
-
-
-        private void AddToHistory(string original, string translated, string icon = "\uE7F4", string color = "White")
+        // Generates context + EN options + ES translation for a detected question.
+        // Runs inside RunQuestionWorkerAsync; token is cancelled by a newer question or shutdown.
+        private async Task GenerateResponseAsync(QuestionJob job, CancellationToken token)
         {
-            var newItem = new TranslationItem 
-            { 
-                OriginalText = original, 
-                TranslatedText = translated,
-                Timestamp = DateTime.Now,
-                SourceIcon = icon,
-                SourceColor = color
-            };
+            string sentence = job.Sentence;
+            var qResult = job.Detection;
+            bool isForced = qResult.DetectedVia == "Manual";
 
-            History.Add(newItem);
-            
-            // Auto scroll
-            HistoryScrollViewer.ScrollToBottom();
+            string context = GetRecentContext();
 
-            // Persist to file
-            AppendToLog(newItem);
+            Dispatcher.Invoke(() =>
+            {
+                QuestionText.Text              = sentence;
+                QuestionBadge.Text             = isForced ? "✏️ Manual" : $"❓ {qResult.Confidence:P0}";
+                QuestionBadgeBorder.Visibility = Visibility.Visible;
+                QuestionContextText.Text       = "Analizando contexto...";
+                ResponseEnText.Text            = "Generando opciones...";
+                ResponseEsText.Text            = "...";
+                ResponseStatus.Text            = "";
+                ResponseLoadingBar.Visibility  = Visibility.Visible;
+            });
+
+            // Persist detected question to DB
+            if (_currentSession != null && _sessionService != null)
+            {
+                var question = new DetectedQuestion
+                {
+                    SessionId    = _currentSession.Id,
+                    QuestionText = sentence,
+                    Type         = qResult.Type,
+                    Context      = qResult.DetectedVia,
+                    DetectedAt   = DateTime.Now,
+                    WasAnswered  = false
+                };
+                _currentSession.Questions.Add(question);
+                _ = _sessionService.SaveQuestionAsync(question);
+            }
+
+            // Context analysis runs in background; EN options start immediately
+            var contextTask = _translator.StreamChatAsync(
+                "You are analyzing a classroom conversation. In 1-2 sentences explain WHY the teacher is " +
+                "asking this question — what topic or concept it connects to. Reply in Spanish only. Be concise.",
+                $"Context:\n{context}\n\nTeacher's question: \"{sentence}\"",
+                partial => Dispatcher.Invoke(() =>
+                {
+                    if (!token.IsCancellationRequested) QuestionContextText.Text = partial;
+                }),
+                token);
+
+            string enOptions = await _translator.StreamChatAsync(
+                $"You are an English tutor helping a {_englishLevel}-level student named {_userName}. " +
+                "Write EXACTLY 3 numbered response options the student can say to the teacher. " +
+                "ALL 3 options MUST be written in ENGLISH only — never use Spanish or any other language. " +
+                "Max 20 words per option. Return ONLY this format, nothing else:\n" +
+                "1. [English response]\n2. [English response]\n3. [English response]",
+                $"Context:\n{context}\n\nTeacher's question: \"{sentence}\"",
+                partial => Dispatcher.Invoke(() =>
+                {
+                    if (!token.IsCancellationRequested) ResponseEnText.Text = partial;
+                }),
+                token);
+
+            token.ThrowIfCancellationRequested();
+
+            var esTask = _translator.StreamChatAsync(
+                "Translate the following numbered English response options into natural Spanish. " +
+                "ALL output MUST be in Spanish only — never include English. " +
+                "Keep the same numbering. Return ONLY the translated list, nothing else.",
+                enOptions,
+                partial => Dispatcher.Invoke(() =>
+                {
+                    if (!token.IsCancellationRequested) ResponseEsText.Text = partial;
+                }),
+                token);
+
+            await Task.WhenAll(contextTask, esTask);
+
+            token.ThrowIfCancellationRequested();
+
+            Dispatcher.Invoke(() =>
+            {
+                ResponseStatus.Text           = DateTime.Now.ToString("HH:mm");
+                ResponseLoadingBar.Visibility = Visibility.Collapsed;
+            });
         }
 
-        private void AppendToLog(TranslationItem item)
+        // ─── Manual chat input ────────────────────────────────────────────────
+
+        private void ManualQuestionBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (ManualQuestionHint != null)
+                ManualQuestionHint.Visibility = string.IsNullOrEmpty(ManualQuestionBox.Text)
+                    ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private async void ManualQuestion_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            try { await SubmitManualQuestion(); }
+            catch (Exception ex) { AppLogger.Error("ManualQuestion_KeyDown", ex); }
+        }
+
+        private async void ManualQuestion_Submit(object sender, RoutedEventArgs e)
+        {
+            try { await SubmitManualQuestion(); }
+            catch (Exception ex) { AppLogger.Error("ManualQuestion_Submit", ex); }
+        }
+
+        private async Task SubmitManualQuestion()
+        {
+            string question = ManualQuestionBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(question)) return;
+            ManualQuestionBox.Clear();
+            ManualQuestionHint.Visibility = Visibility.Visible;
+
+            var forced = new QuestionDetectionResult
+                { IsQuestion = true, Confidence = 1.0f, Type = QuestionType.Direct, DetectedVia = "Manual" };
+            ShowQuestionIndicator(forced);
+            _generationCts?.Cancel();
+            await _questionChannel.Writer.WriteAsync(new QuestionJob(question, forced));
+        }
+
+        private void ShowQuestionIndicator(QuestionDetectionResult result) =>
+            Dispatcher.Invoke(() =>
+            {
+                QuestionBadge.Text             = $"❓ {result.Confidence:P0}";
+                QuestionBadgeBorder.Visibility = Visibility.Visible;
+            });
+
+        // ─── Translation ──────────────────────────────────────────────────────
+
+        private async void Translate_Click(object sender, MouseButtonEventArgs e)
         {
             try
             {
-                string logLine = $"{item.Timestamp:yyyy-MM-dd HH:mm:ss} | {item.OriginalText} | {item.TranslatedText}{Environment.NewLine}";
-                System.IO.File.AppendAllText("conversation_history.log", logLine);
+                string fullText = string.IsNullOrWhiteSpace(_captions.FullTranscription)
+                    ? TranscriptionText.Text
+                    : _captions.FullTranscription + (string.IsNullOrWhiteSpace(_captions.Pending)
+                        ? "" : "\n" + _captions.Pending);
+                string textToTranslate = fullText.Trim();
+                if (string.IsNullOrWhiteSpace(textToTranslate)) return;
+
+                _autoTranslateCts?.Cancel();
+                _autoTranslationBuffer = "";
+
+                TranslateButtonBorder.IsHitTestVisible = false;
+                TranslateButtonBorder.Opacity = 0.4;
+                TranslationStatus.Text = "traduciendo...";
+                TranslationText.Text = "";
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                string result = await TranslateTextAsync(textToTranslate, "", cts.Token);
+
+                if (string.IsNullOrWhiteSpace(result) || result.StartsWith("[Error"))
+                {
+                    TranslationStatus.Text = "sin resultado";
+                    return;
+                }
+
+                TranslationText.Text   = result;
+                TranslationStatus.Text = DateTime.Now.ToString("HH:mm");
+                TranslationScrollViewer.ScrollToBottom();
+
+                if (_currentSession != null)
+                {
+                    var entry = new TranscriptionEntry
+                    {
+                        SessionId = _currentSession.Id, OriginalText = textToTranslate,
+                        TranslatedText = result, Timestamp = DateTime.Now,
+                        Source = EntrySource.LiveCaption, ConfidenceScore = 1.0f
+                    };
+                    _currentSession.Entries.Add(entry);
+                    _ = _sessionService?.SaveEntryAsync(entry);
+                    AppendToLog(textToTranslate, result);
+                }
             }
-            catch { /* Best effort logging */ }
+            catch (Exception ex)
+            {
+                TranslationStatus.Text = "error";
+                TranslationText.Text   = $"[Error: {ex.Message[..Math.Min(60, ex.Message.Length)]}]";
+                AppLogger.Error("Translate_Click", ex);
+            }
+            finally
+            {
+                TranslateButtonBorder.IsHitTestVisible = true;
+                TranslateButtonBorder.Opacity = 1.0;
+            }
+        }
+
+        private async Task AutoTranslateSentenceAsync(string sentence)
+        {
+            if (sentence.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < MinWordsForAutoTranslate)
+                return;
+
+            _autoTranslateCts?.Cancel();
+            _autoTranslateCts = new CancellationTokenSource();
+            var token = _autoTranslateCts.Token;
+
+            string snapshot = _autoTranslationBuffer;
+            Dispatcher.Invoke(() =>
+            {
+                TranslationText.Text   = snapshot;
+                TranslationStatus.Text = "traduciendo...";
+            });
+
+            try
+            {
+                string result = await TranslateTextAsync(sentence, snapshot, token);
+                if (token.IsCancellationRequested) return;
+                if (string.IsNullOrWhiteSpace(result) || result.StartsWith("[Error")) return;
+
+                var bufferLines = string.IsNullOrEmpty(_autoTranslationBuffer)
+                    ? new System.Collections.Generic.List<string>()
+                    : _autoTranslationBuffer.Split('\n').ToList();
+                bufferLines.Add(result);
+                if (bufferLines.Count > 150) bufferLines = bufferLines[^150..].ToList();
+                _autoTranslationBuffer = string.Join("\n", bufferLines);
+
+                Dispatcher.Invoke(() =>
+                {
+                    TranslationText.Text   = _autoTranslationBuffer;
+                    TranslationStatus.Text = DateTime.Now.ToString("HH:mm");
+                    TranslationScrollViewer.ScrollToBottom();
+                });
+
+                if (_currentSession != null)
+                {
+                    var entry = new TranscriptionEntry
+                    {
+                        SessionId = _currentSession.Id, OriginalText = sentence,
+                        TranslatedText = result, Timestamp = DateTime.Now,
+                        Source = EntrySource.LiveCaption, ConfidenceScore = 1.0f
+                    };
+                    _currentSession.Entries.Add(entry);
+                    _ = _sessionService?.SaveEntryAsync(entry);
+                    AppendToLog(sentence, result);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                if (!token.IsCancellationRequested)
+                {
+                    AppLogger.Error("[AutoTranslate]", ex);
+                    Dispatcher.Invoke(() => TranslationStatus.Text = "error auto-traducción");
+                }
+            }
+        }
+
+        private async Task<string> TranslateTextAsync(string text, string snapshot, CancellationToken token)
+        {
+            if ((DateTime.Now - _libreTranslateLastCheck).TotalSeconds > 30)
+            {
+                _libreTranslateAvailable = await _libreTranslate.IsRunningAsync();
+                _libreTranslateLastCheck = DateTime.Now;
+                UpdateLibreTranslateStatus();
+            }
+
+            if (_libreTranslateAvailable)
+            {
+                string result = await _libreTranslate.TranslateAsync(text, token: token);
+                if (!string.IsNullOrWhiteSpace(result)) return result;
+                _libreTranslateAvailable = false;
+                _libreTranslateLastCheck = DateTime.MinValue;
+                UpdateLibreTranslateStatus();
+            }
+
+            return await _translator.TranslateStreamAsync(
+                text,
+                partial => Dispatcher.Invoke(() =>
+                {
+                    if (token.IsCancellationRequested) return;
+                    TranslationText.Text = string.IsNullOrEmpty(snapshot)
+                        ? partial : snapshot + "\n" + partial;
+                    if (TranslationScrollViewer.VerticalOffset >= TranslationScrollViewer.ScrollableHeight - 40)
+                        TranslationScrollViewer.ScrollToBottom();
+                }),
+                token: token);
+        }
+
+        private void UpdateLibreTranslateStatus()
+        {
+            Dispatcher.InvokeAsync(() =>
+            {
+                if (_libreTranslateAvailable) TranslationStatus.Text = "LibreTranslate ✓";
+            });
+        }
+
+        // ─── Context ──────────────────────────────────────────────────────────
+
+        public string GetRecentContext() => _captions.GetRecentContext(15);
+
+        // ─── LM Studio health ─────────────────────────────────────────────────
+
+        private void StartLmStudioHealthCheck()
+        {
+            _lmStudioHealthTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+            _lmStudioHealthTimer.Tick += async (_, __) =>
+            {
+                try { await CheckLmStudioHealthAsync(); }
+                catch (Exception ex) { AppLogger.Error("HealthCheck tick", ex); }
+            };
+            _lmStudioHealthTimer.Start();
+            _ = CheckLmStudioHealthAsync();
+        }
+
+        private async Task CheckLmStudioHealthAsync()
+        {
+            bool online = await _translator.IsRunningAsync();
+            if (online == _isLmStudioOnline) return;
+            _isLmStudioOnline = online;
+            if (!online) AppLogger.Warn("LM Studio went offline");
+            Dispatcher.Invoke(() =>
+            {
+                LmStudioStatusBadge.Background = online
+                    ? new SolidColorBrush(Color.FromArgb(0x33, 0x4C, 0xAF, 0x50))
+                    : new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0x44, 0x44));
+                LmStudioStatusText.Text = online ? "● LM Studio" : "● LM Studio offline";
+                LmStudioStatusText.Foreground = online
+                    ? new SolidColorBrush(Color.FromArgb(0xCC, 0x80, 0xFF, 0x80))
+                    : new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0x88, 0x88));
+            });
+        }
+
+        // ─── Keyboard shortcuts ───────────────────────────────────────────────
+
+        private void Window_KeyDown(object sender, KeyEventArgs e)
+        {
+            bool ctrl  = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+            bool shift = (Keyboard.Modifiers & ModifierKeys.Shift)   == ModifierKeys.Shift;
+
+            if (ctrl && e.Key == Key.Space)
+                Copilot_Click(this, new RoutedEventArgs());
+            else if (ctrl && e.Key == Key.T)
+                Translate_Click(this, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left));
+            else if (ctrl && e.Key == Key.M)
+                PrimaryAction_Click(this, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left));
+            else if (ctrl && shift && e.Key == Key.C)
+                ClearHistory_Click(this, new RoutedEventArgs());
+            else if (e.Key == Key.Escape)
+            {
+                if (SuggestionsOverlay.Visibility == Visibility.Visible)
+                    SuggestionsOverlay.Visibility = Visibility.Collapsed;
+                else if (SettingsPanel.Visibility == Visibility.Visible)
+                    SettingsPanel.Visibility = Visibility.Collapsed;
+                else if (SessionPanel.Visibility == Visibility.Visible)
+                    SessionPanel.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        // ─── Copy buttons ─────────────────────────────────────────────────────
+
+        private void ShowCopyFeedback()
+        {
+            string prev = StatusText.Text;
+            StatusText.Text = "¡Copiado!";
+            var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+            t.Tick += (_, __) => { StatusText.Text = prev; t.Stop(); };
+            t.Start();
+        }
+
+        private void CopyQuestion_Click(object sender, RoutedEventArgs e)
+        {
+            if (!string.IsNullOrWhiteSpace(QuestionText.Text)
+                && QuestionText.Text != "Esperando pregunta del profesor...")
+            {
+                Clipboard.SetText(QuestionText.Text);
+                ShowCopyFeedback();
+            }
+        }
+
+        private void CopyEnOptions_Click(object sender, RoutedEventArgs e)
+        {
+            if (!string.IsNullOrWhiteSpace(ResponseEnText.Text)
+                && !ResponseEnText.Text.StartsWith("Las opciones"))
+            {
+                Clipboard.SetText(ResponseEnText.Text);
+                ShowCopyFeedback();
+            }
+        }
+
+        private void CopyEsOptions_Click(object sender, RoutedEventArgs e)
+        {
+            if (!string.IsNullOrWhiteSpace(ResponseEsText.Text)
+                && !ResponseEsText.Text.StartsWith("Las opciones"))
+            {
+                Clipboard.SetText(ResponseEsText.Text);
+                ShowCopyFeedback();
+            }
+        }
+
+        // ─── Session rename ───────────────────────────────────────────────────
+
+        private void RenameSession_Click(object sender, RoutedEventArgs e)
+        {
+            SessionTitleBox.Text = CurrentSessionTitle.Text;
+            BtnSessions.Visibility = Visibility.Collapsed;
+            BtnRenameSession.Visibility = Visibility.Collapsed;
+            SessionRenamePanel.Visibility = Visibility.Visible;
+            SessionTitleBox.Focus();
+            SessionTitleBox.SelectAll();
+        }
+
+        private void SessionTitleBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter) CommitSessionRename();
+            else if (e.Key == Key.Escape) CancelSessionRename();
+        }
+
+        private void SessionTitleBox_LostFocus(object sender, RoutedEventArgs e) =>
+            CommitSessionRename();
+
+        private void CommitSessionRename()
+        {
+            string newTitle = SessionTitleBox.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(newTitle) && _currentSession != null)
+            {
+                _currentSession.Title = newTitle;
+                CurrentSessionTitle.Text = newTitle;
+                _ = _sessionService?.SaveSessionAsync(_currentSession);
+            }
+            CancelSessionRename();
+        }
+
+        private void CancelSessionRename()
+        {
+            SessionRenamePanel.Visibility = Visibility.Collapsed;
+            BtnSessions.Visibility = Visibility.Visible;
+            BtnRenameSession.Visibility = Visibility.Visible;
+        }
+
+        // ─── Settings ─────────────────────────────────────────────────────────
+
+        private void AppendToLog(string original, string translated)
+        {
+            try
+            {
+                File.AppendAllText(LogPath,
+                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} | {original} | {translated}{Environment.NewLine}");
+            }
+            catch (Exception ex) { AppLogger.Error("AppendToLog", ex); }
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                if (!File.Exists(SettingsPath)) return;
+                var doc = JsonDocument.Parse(File.ReadAllText(SettingsPath));
+                if (doc.RootElement.TryGetProperty("userName",      out var u)) _userName          = u.GetString() ?? "Charlie";
+                if (doc.RootElement.TryGetProperty("englishLevel",  out var l)) _englishLevel      = l.GetString() ?? "B1";
+                if (doc.RootElement.TryGetProperty("lmStudioModel", out var o)) _lmStudioModelName = o.GetString() ?? "google/gemma-4-e4b";
+            }
+            catch (Exception ex) { AppLogger.Error("LoadSettings", ex); }
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                Directory.CreateDirectory(AppDataDir);
+                File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new
+                {
+                    userName      = _userName,
+                    englishLevel  = _englishLevel,
+                    lmStudioModel = _lmStudioModelName
+                }));
+            }
+            catch (Exception ex) { AppLogger.Error("SaveSettings", ex); }
         }
 
         private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (MainBorder != null)
             {
-               // Convert slider 0-1 to hex alpha? No, Border Background is solid, we set Opacity of the whole border/window background?
-               // Actually changing the brush alpha is better for glass look.
-               // Assuming #CC000000 base (204 alpha). 
-               // Let's just control the Window Background or Border Background opacity.
-               // Simplest: Control Border Background Opacity.
-               
-               byte alpha = (byte)(e.NewValue * 255);
-               MainBorder.Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(alpha, 0, 0, 0));
+                byte alpha = (byte)(e.NewValue * 255);
+                MainBorder.Background = new SolidColorBrush(Color.FromArgb(alpha, 0, 0, 0));
             }
         }
 
         private async void Settings_Click(object sender, RoutedEventArgs e)
         {
-            if (SettingsPanel.Visibility == Visibility.Visible)
+            try
             {
-                SettingsPanel.Visibility = Visibility.Collapsed;
+                if (SettingsPanel.Visibility == Visibility.Visible)
+                {
+                    SettingsPanel.Visibility = Visibility.Collapsed;
+                    SaveSettings();
+                }
+                else
+                {
+                    UserNameBox.Text = _userName;
+                    foreach (ComboBoxItem item in LevelCombo.Items)
+                        if (item.Content.ToString() == _englishLevel) { LevelCombo.SelectedItem = item; break; }
+                    await PopulateLmStudioModelsAsync();
+                    SettingsPanel.Visibility = Visibility.Visible;
+                    LoadMicrophones();
+                }
             }
-            else
-            {
-                SettingsPanel.Visibility = Visibility.Visible;
-                LoadMicrophones();
-            }
+            catch (Exception ex) { AppLogger.Error("Settings_Click", ex); }
+        }
+
+        private async Task PopulateLmStudioModelsAsync()
+        {
+            LmStudioModelStatus.Text = "Cargando modelos...";
+            var models = await _translator.GetInstalledModelsAsync();
+            LmStudioModelCombo.ItemsSource  = models.Count > 0 ? models : new System.Collections.Generic.List<string> { _lmStudioModelName };
+            LmStudioModelCombo.SelectedItem = models.Contains(_lmStudioModelName) ? _lmStudioModelName
+                                            : (models.Count > 0 ? models[0] : _lmStudioModelName);
+            LmStudioModelStatus.Text = models.Count > 0
+                ? $"{models.Count} modelo(s) instalado(s)"
+                : "LM Studio offline o sin modelos";
         }
 
         private void LoadMicrophones()
@@ -439,563 +870,469 @@ namespace WindowsLiveCaptionsReader
             var devices = _micService.GetMicrophones();
             ComboMicrophones.ItemsSource = devices;
             ComboMicrophones.DisplayMemberPath = "Name";
-            // Select default if not set (simple logic for now)
             if (ComboMicrophones.SelectedIndex < 0 && devices.Count > 0)
                 ComboMicrophones.SelectedIndex = 0;
         }
 
         private void ComboMicrophones_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-             if (ComboMicrophones.SelectedItem is AudioCaptureService.AudioDevice device)
-             {
-                 _micService.SetDevice(device.Index);
-             }
+            if (ComboMicrophones.SelectedItem is AudioCaptureService.AudioDevice device)
+                _micService.SetDevice(device.Index);
         }
 
         private async void TestSystem_Click(object sender, RoutedEventArgs e)
         {
-             TestResultText.Text = "Running diagnostics...";
-             
-             // 1. Ollama Check
-             bool ollamaOk = await _translator.IsRunningAsync();
-             
-             // 2. Mic Check
-             bool micOk = ComboMicrophones.SelectedItem != null;
-             
-             var sb = new System.Text.StringBuilder();
-             sb.AppendLine(ollamaOk ? "✅ Ollama: Online" : "❌ Ollama: Offline");
-             sb.AppendLine(micOk ? $"✅ Mic: Selected" : "⚠️ Mic: None selected");
-             
-             // 3. Audio Level Check (User must speak)
-             sb.AppendLine("ℹ️ Speak now to see Mic Level bar move.");
-             
-             TestResultText.Text = sb.ToString();
-             TestResultText.Foreground = ollamaOk ? System.Windows.Media.Brushes.LightGreen : System.Windows.Media.Brushes.Orange;
+            try
+            {
+                TestResultText.Text = "Ejecutando diagnósticos...";
+                bool lmStudioOk = await _translator.IsRunningAsync();
+                bool micOk = ComboMicrophones.SelectedItem != null;
+
+                var sb = new StringBuilder();
+                sb.AppendLine(lmStudioOk ? "✅ LM Studio: En línea"  : "❌ LM Studio: Sin conexión");
+                sb.AppendLine("✅ Live Captions: Activo");
+                sb.AppendLine(micOk       ? "✅ Micrófono: Seleccionado" : "⚠️ Micrófono: Ninguno");
+
+                TestResultText.Text       = sb.ToString();
+                TestResultText.Foreground = lmStudioOk ? Brushes.LightGreen : Brushes.Orange;
+            }
+            catch (Exception ex) { AppLogger.Error("TestSystem_Click", ex); }
         }
 
         private void CloseSettings_Click(object sender, RoutedEventArgs e)
         {
             SettingsPanel.Visibility = Visibility.Collapsed;
+            SaveSettings();
         }
 
-        private void Topmost_Checked(object sender, RoutedEventArgs e)
+        private void UserNameBox_TextChanged(object sender, TextChangedEventArgs e)
         {
-            this.Topmost = true;
+            if (sender is TextBox tb && !string.IsNullOrWhiteSpace(tb.Text))
+                _userName = tb.Text.Trim();
         }
 
-        private void Topmost_Unchecked(object sender, RoutedEventArgs e)
+        private void LevelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            this.Topmost = false;
+            if (sender is ComboBox cb && cb.SelectedItem is ComboBoxItem item)
+                _englishLevel = item.Content.ToString() ?? "B1";
         }
 
-        private void CloseApp_Click(object sender, RoutedEventArgs e)
+        private void WhisperModelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) { }
+
+        private void LmStudioModelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            this.Close();
-        }
-
-        private AssistantWindow? _assistantWindow;
-
-        private void Copilot_Click(object sender, RoutedEventArgs e)
-        {
-            // Gather context from history (last 5 items)
-            var recentItems = History.TakeLast(5).Select(h => 
-                $"{(h.SourceIcon == "\uE7F4" ? "Teacher" : "Me")}: {h.OriginalText}"
-            ).ToList();
-            
-            string context = string.Join("\n", recentItems);
-
-            if (_assistantWindow == null || !_assistantWindow.IsLoaded)
+            if (LmStudioModelCombo.SelectedItem is string model && !string.IsNullOrWhiteSpace(model))
             {
-                _assistantWindow = new AssistantWindow(_translator, context, this);
-                _assistantWindow.Show();
-            }
-            else
-            {
-                _assistantWindow.UpdateContext(context);
-                _assistantWindow.Activate();
+                _lmStudioModelName = model;
+                _translator.SetModel(model);
             }
         }
-        
-        private void DismissCopilot_Click(object sender, RoutedEventArgs e)
+
+        private async void RefreshLmStudioModels_Click(object sender, RoutedEventArgs e)
         {
-            // Legacy handler kept for binding safety if XAML still references it, 
-            // though we are hiding the overlay via this new logic being separate.
+            try { await PopulateLmStudioModelsAsync(); }
+            catch (Exception ex) { AppLogger.Error("RefreshLmStudioModels_Click", ex); }
+        }
+
+        private void Topmost_Checked(object sender, RoutedEventArgs e)   => Topmost = true;
+        private void Topmost_Unchecked(object sender, RoutedEventArgs e) => Topmost = false;
+
+        private void CloseApp_Click(object sender, RoutedEventArgs e) => Close();
+
+        // ─── Embedded assistant panel ─────────────────────────────────────────
+
+        private void Copilot_Click(object sender, RoutedEventArgs e) => ToggleAssistantPanel();
+
+        private void CloseAssistantPanel_Click(object sender, RoutedEventArgs e)
+        {
             SuggestionsOverlay.Visibility = Visibility.Collapsed;
+            _isAssistantOpen = false;
         }
 
-        // --- SIMPLIFIED UX: PRIMARY AND SECONDARY ACTION BUTTONS ---
-        
+        private async void RefreshAssistantPanel_Click(object sender, RoutedEventArgs e)
+        {
+            try { await LoadAssistantSuggestionsAsync(); }
+            catch (Exception ex) { AppLogger.Error("RefreshAssistantPanel_Click", ex); }
+        }
+
+        private void CopyAssistantSuggestion_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is string text)
+            {
+                Clipboard.SetText(text);
+                AssistantStatusText.Text = "¡Copiado!";
+
+                var lastQ = _currentSession?.Questions.LastOrDefault(q => !q.WasAnswered);
+                if (lastQ != null)
+                {
+                    lastQ.WasAnswered = true;
+                    _ = _sessionService?.SaveQuestionAsync(lastQ);
+                }
+
+                var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                t.Tick += (_, __) => { AssistantStatusText.Text = ""; t.Stop(); };
+                t.Start();
+            }
+        }
+
+        private void ToggleAssistantPanel()
+        {
+            _isAssistantOpen = true;
+            SuggestionsOverlay.Visibility = Visibility.Visible;
+            AssistantContextText.Text = GetRecentContext();
+            _ = LoadAssistantSuggestionsAsync();
+        }
+
+        private async Task LoadAssistantSuggestionsAsync()
+        {
+            AssistantLoadingText.Visibility = Visibility.Visible;
+            AssistantSuggestionsList.ItemsSource = null;
+            AssistantStatusText.Text = "Analyzing...";
+
+            try
+            {
+                string context = GetRecentContext();
+                AssistantContextText.Text = context;
+
+                string systemPrompt =
+                    $"You are an exam assistant for a {_englishLevel} English student named {_userName}." +
+                    " When given a recent conversation, produce ONLY a JSON array of objects." +
+                    " Each object has exactly these keys: title (string), text (string), translation (string in Spanish)," +
+                    " pronunciation (string with IPA or simple phonetic hint for 1-3 key words)." +
+                    $" Give exactly 3 candidate answers appropriate for {_englishLevel} level (≤ 40 words each). No other text.";
+
+                string userPrompt = $"Conversation:\n{context}" +
+                    "\n\nRespond with ONLY the JSON array. No markdown fences, no explanation." +
+                    "\nExample: [{\"title\":\"Option 1\",\"text\":\"...\",\"translation\":\"...\"}]";
+
+                string raw = await _translator.AskAsync(systemPrompt, userPrompt, CancellationToken.None);
+                var suggestions = ParseSuggestions(raw);
+                AssistantSuggestionsList.ItemsSource = suggestions;
+                AssistantStatusText.Text = $"{suggestions.Count} suggestions";
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("LoadAssistantSuggestions", ex);
+                AssistantStatusText.Text = $"Error: {ex.Message[..Math.Min(40, ex.Message.Length)]}";
+            }
+            finally
+            {
+                AssistantLoadingText.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private static System.Collections.Generic.List<AssistantSuggestion> ParseSuggestions(string raw)
+        {
+            try
+            {
+                int start = raw.IndexOf('[');
+                int end   = raw.LastIndexOf(']');
+                if (start < 0 || end < 0) return [];
+                string json = raw[start..(end + 1)];
+                return JsonSerializer.Deserialize<System.Collections.Generic.List<AssistantSuggestion>>(json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+            }
+            catch { return []; }
+        }
+
+        // ─── Primary action (pause/resume) ────────────────────────────────────
+
+        private void Minimize_Click(object sender, RoutedEventArgs e) =>
+            WindowState = WindowState.Minimized;
+
         private void PrimaryAction_Click(object sender, MouseButtonEventArgs e)
         {
-            if (_isRecordingMode)
+            _isPaused = !_isPaused;
+            if (_isPaused)
             {
-                // RECORDING MODE: Primary button handles Record/Stop
-                if (!_audioRecorder.IsRecording)
-                {
-                    // Start Recording
-                    StartRecording();
-                }
-                else
-                {
-                    // Stop and Analyze
-                    StopAndAnalyze();
-                }
+                _reader?.Stop();
+                UpdatePrimaryButton("▶", "Reanudar", "#FF9800");
+                StatusText.Text = "Pausado";
+                ModeText.Text = "PAUSADO";
+                ModeIndicatorBadge.Background = new SolidColorBrush(Color.FromArgb(0xFF, 0xFF, 0x98, 0x00));
             }
             else
             {
-                // LIVE MODE: Primary button handles Pause/Resume
-                _isPaused = !_isPaused;
-                if (_isPaused)
-                {
-                    _reader.Stop();
-                    UpdatePrimaryButton("▶️", "REANUDAR ESCUCHA", "#FF9800");
-                    StatusText.Text = "Pausado";
-                }
-                else
-                {
-                    _reader.Start();
-                    UpdatePrimaryButton("⏸️", "PAUSAR ESCUCHA", "#4CAF50");
-                    StatusText.Text = "Escuchando...";
-                }
+                _reader?.Start();
+                UpdatePrimaryButton("⏸", "Pausar", "#4CAF50");
+                StatusText.Text = "Live Captions";
+                ModeText.Text = "LIVE";
+                ModeIndicatorBadge.Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x4C, 0xAF, 0x50));
             }
         }
-        
-        private void SecondaryAction_Click(object sender, MouseButtonEventArgs e)
-        {
-            // Toggle between Live and Recording modes
-            _isRecordingMode = !_isRecordingMode;
-            
-            if (_isRecordingMode)
-            {
-                // Switch to RECORDING Mode
-                SwitchToRecordingMode();
-            }
-            else
-            {
-                // Switch to LIVE Mode
-                SwitchToLiveMode();
-            }
-        }
-        
-        // Helper methods for UI updates
+
+        private void SecondaryAction_Click(object sender, MouseButtonEventArgs e) { }
+
         private void UpdatePrimaryButton(string icon, string text, string color)
         {
             PrimaryButtonIcon.Text = icon;
             PrimaryButtonText.Text = text;
-            PrimaryButtonBorder.Background = (SolidColorBrush)new BrushConverter().ConvertFrom(color);
-        }
-        
-        private void UpdateSecondaryButton(string icon, string text)
-        {
-            SecondaryButtonIcon.Text = icon;
-            SecondaryButtonText.Text = text;
-        }
-        
-        private void SwitchToRecordingMode()
-        {
-            // Stop live capturing
-            _reader.Stop();
-            if (_isMicActive) _micService.StopListening();
-            
-            // Update mode indicator
-            ModeText.Text = "MODO GRABACIÓN";
-            ModeIcon.Text = "🎙️";
-            ModeIndicatorBadge.Background = (SolidColorBrush)new BrushConverter().ConvertFrom("#FF5722");
-            
-            // Update primary button
-            UpdatePrimaryButton("🔴", "GRABAR AUDIO", "#FF5722");
-            
-            // Update secondary button
-            UpdateSecondaryButton("⚡", "Volver a Modo Live");
-            
-            // Update status
-            StatusText.Text = "Listo para grabar";
-            OriginalTextBlock.Text = "Presiona 'GRABAR AUDIO' y habla sin límites";
-            TranslatedTextBlock.Text = "";
-            
-            _isPaused = false;
-        }
-        
-        private void SwitchToLiveMode()
-        {
-            // Resume live capturing
-            _reader.Start();
-            
-            // Update mode indicator
-            ModeText.Text = "MODO LIVE";
-            ModeIcon.Text = "⚡";
-            ModeIndicatorBadge.Background = (SolidColorBrush)new BrushConverter().ConvertFrom("#4CAF50");
-            
-            // Update primary button
-            UpdatePrimaryButton("⏸️", "PAUSAR ESCUCHA", "#4CAF50");
-            
-            // Update secondary button
-            UpdateSecondaryButton("🎙️", "Cambiar a Modo Grabación");
-            
-            // Update status
-            StatusText.Text = "Escuchando...";
-            RecordingTimer.Visibility = Visibility.Collapsed;
-            
-            _isPaused = false;
-        }
-        
-        private async void StartRecording()
-        {
-            try 
-            {
-                _audioRecorder.StartRecording(_tempAudioFile);
-                
-                // Update UI
-                UpdatePrimaryButton("⏹️", "DETENER Y ANALIZAR", "#E64A19");
-                RecordingTimer.Visibility = Visibility.Visible;
-                StatusText.Text = "Grabando...";
-                StatusText.Foreground = Brushes.Red;
-                
-                OriginalTextBlock.Text = "🔴 Grabando... Habla ahora";
-                TranslatedTextBlock.Text = "";
-                
-                // Start timer (simple implementation)
-                var startTime = DateTime.Now;
-                var timer = new DispatcherTimer();
-                timer.Interval = TimeSpan.FromSeconds(1);
-                timer.Tick += (s, e) =>
-                {
-                    if (_audioRecorder.IsRecording)
-                    {
-                        var elapsed = DateTime.Now - startTime;
-                        RecordingTimer.Text = elapsed.ToString(@"mm\:ss");
-                    }
-                    else
-                    {
-                        timer.Stop();
-                    }
-                };
-                timer.Start();
-            }
-            catch (Exception ex)
-            {
-                StatusText.Text = "Error al iniciar micrófono";
-                MessageBox.Show($"Error: {ex.Message}");
-            }
-        }
-        
-        private async void StopAndAnalyze()
-        {
-            if (_audioRecorder.IsRecording)
-            {
-                // 1. Stop Recording
-                _audioRecorder.StopRecording();
-                RecordingTimer.Visibility = Visibility.Collapsed;
-                StatusText.Text = "Procesando audio...";
-                StatusText.Foreground = Brushes.Cyan;
-                
-                UpdatePrimaryButton("🔴", "GRABAR AUDIO", "#FF5722");
-                
-                try
-                {
-                    // 2. Transcribe with Whisper (Local)
-                    OriginalTextBlock.Text = "📝 Transcribiendo con Whisper...";
-                    TranslatedTextBlock.Text = "";
-                    
-                    if (!_whisper.IsModelLoaded)
-                    {
-                         StatusText.Text = "Descargando modelo Whisper...";
-                         await _whisper.InitializeAsync();
-                    }
-                    
-                    string transcription = await _whisper.TranscribeAsync(_tempAudioFile);
-                    
-                    if (string.IsNullOrWhiteSpace(transcription))
-                    {
-                        StatusText.Text = "No se detectó voz";
-                        OriginalTextBlock.Text = "No se detectó voz en la grabación";
-                        return;
-                    }
-
-                    // 3. Translate & Show
-                    OriginalTextBlock.Text = transcription;
-                    StatusText.Text = "Traduciendo...";
-                    
-                    // Translate with Ollama
-                    string translation = await _translator.TranslateAsync(transcription);
-                    TranslatedTextBlock.Text = translation;
-                    
-                    // Add to history
-                    AddToHistory(transcription, translation, "\uE720", "#FF4CAF50"); // Mic icon
-                    
-                    StatusText.Text = "Análisis listo";
-                    StatusText.Foreground = Brushes.SpringGreen;
-                    
-                    // 4. Open Assistant for Context
-                    Copilot_Click(null, null);
-                }
-                catch (Exception ex)
-                {
-                    StatusText.Text = "Error al procesar";
-                    MessageBox.Show($"Error: {ex.Message}");
-                    OriginalTextBlock.Text = "Error al procesar el audio";
-                }
-            }
-        }
-        
-        // Keep old methods for compatibility but mark as deprecated
-        private void ModeSwitch_Click(object sender, RoutedEventArgs e)
-        {
-            // Redirect to new secondary action logic
-            _isRecordingMode = !_isRecordingMode;
-            if (_isRecordingMode) SwitchToRecordingMode();
-            else SwitchToLiveMode();
+            PrimaryButtonBorder.Background = (SolidColorBrush)new BrushConverter().ConvertFrom(color)!;
         }
 
-        private async void PauseResume_Click(object sender, RoutedEventArgs e)
-        {
-            // Redirect to unified primary action logic
-            if (_isRecordingMode)
-            {
-                if (!_audioRecorder.IsRecording) StartRecording();
-                else StopAndAnalyze();
-            }
-            else
-            {
-                _isPaused = !_isPaused;
-                if (_isPaused)
-                {
-                    _reader.Stop();
-                    UpdatePrimaryButton("▶️", "REANUDAR ESCUCHA", "#FF9800");
-                    StatusText.Text = "Pausado";
-                }
-                else
-                {
-                    _reader.Start();
-                    UpdatePrimaryButton("⏸️", "PAUSAR ESCUCHA", "#4CAF50");
-                    StatusText.Text = "Escuchando...";
-                }
-            }
-        }
-        
-        private async void StopAndSend_Click(object sender, RoutedEventArgs e)
-        {
-            // Redirect to unified stop and analyze
-            StopAndAnalyze();
-        }
-        
         private void MicToggle_Click(object sender, RoutedEventArgs e)
         {
             _isMicActive = !_isMicActive;
-            
             if (_isMicActive)
             {
                 _micService.Start();
                 StatusText.Text = "Micrófono activo";
+                BtnMicToggle.Background = new SolidColorBrush(Color.FromArgb(0x40, 0x4C, 0xAF, 0x50));
             }
             else
             {
                 _micService.Stop();
                 StatusText.Text = "Micrófono desactivado";
+                BtnMicToggle.Background = Brushes.Transparent;
             }
         }
+
+        // ─── Clear / reset ────────────────────────────────────────────────────
 
         private void ClearHistory_Click(object sender, RoutedEventArgs e)
         {
+            var confirm = MessageBox.Show(
+                "¿Limpiar todos los paneles?\nEsta acción no se puede deshacer.",
+                "Confirmar limpieza", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            _generationCts?.Cancel();
+            _autoTranslateCts?.Cancel();
+            _autoTranslationBuffer = "";
+            _previousSentence = "";
+            _captions.Reset();
             History.Clear();
-            OriginalTextBlock.Text = "Listening...";
-            TranslatedTextBlock.Text = "";
+            ResetAssistantPanel();
         }
 
-        // UpdatePauseButtonState removed - functionality moved to PrimaryAction_Click
-
-        public string GetRecentContext()
+        private void ResetAssistantPanel()
         {
-            var recentItems = History.TakeLast(5).Select(h => 
-                $"{(h.SourceIcon == "\uE7F4" ? "Teacher" : "Me")}: {h.OriginalText}"
-            ).ToList();
-            
-            // Also include pending text if any
-            if (!string.IsNullOrWhiteSpace(_pendingText))
-            {
-               string source = (_pendingSourceIcon == "\uE7F4") ? "Teacher" : "Me";
-               recentItems.Add($"{source}: {_pendingText}");
-            }
-            
-            return string.Join("\n", recentItems);
+            TranscriptionText.Text  = "";
+            TranslationText.Text    = "";
+            TranslationStatus.Text  = "";
+            QuestionText.Text        = "Esperando pregunta del profesor...";
+            QuestionContextText.Text = "El contexto de la pregunta aparecerá aquí...";
+            ResponseEnText.Text      = "Las opciones aparecerán al detectar una pregunta...";
+            ResponseEsText.Text      = "Las opciones en español aparecerán aquí...";
+            ResponseStatus.Text      = "";
+            ResponseLoadingBar.Visibility  = Visibility.Collapsed;
+            QuestionBadgeBorder.Visibility = Visibility.Collapsed;
         }
+
+        private void ToggleHistory_Click(object sender, RoutedEventArgs e) { }
 
         private void Window_MouseDown(object sender, MouseButtonEventArgs e)
         {
-            if (e.ChangedButton == MouseButton.Left)
-                this.DragMove();
+            if (e.ChangedButton == MouseButton.Left) DragMove();
         }
-        private Services.BrowserCaptureService _browserScanner = new Services.BrowserCaptureService();
-        private Services.ChromeSessionService _chromeService = new Services.ChromeSessionService();
+
+        // ─── Browser scan ─────────────────────────────────────────────────────
 
         private async void BrowserScan_Click(object sender, RoutedEventArgs e)
         {
-            StatusText.Text = "🌐 Connecting...";
-            
-            // 1. Try High-Fidelity CDP Connection (Selenium)
-            string text = "";
-            bool isCdpConnected = _chromeService.ConnectToExistingSession();
+            try
+            {
+                StatusText.Text = "Conectando al navegador...";
+                string text = "";
+                bool isCdpConnected = _chromeService.ConnectToExistingSession();
 
-            if (isCdpConnected)
-            {
-                StatusText.Text = "⚡ CDP Connected! Scanning DOM...";
-                text = _chromeService.CaptureActiveTabContent();
-                _chromeService.Disconnect(); // Free resources, don't close browser
-            }
-            else
-            {
-                // 2. Fallback to UI Automation (The "Old" Way)
-                StatusText.Text = "⚠️ Standard Scan (Run .bat for HD)...";
-                await Task.Delay(2000); // Wait for switch only if using UI Automation (which relies on focus)
-                text = await _browserScanner.GetSelectedTextAsync();
-            }
-
-            if (string.IsNullOrWhiteSpace(text) || text.StartsWith("Error") || text.StartsWith("Debug"))
-            {
-                StatusText.Text = isCdpConnected ? "❌ CDP Empty Result" : "⚠️ Legacy Scan Failed.";
-                
-                // Show hint if legacy failed
-                if (!isCdpConnected) 
+                if (isCdpConnected)
                 {
-                     // Optional: MessageBox.Show("For better results, close Chrome and run 'LANZAR_MODO_EXAMEN.bat' from the project folder.", "Tip", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-            }
-            else
-            {
-                StatusText.Text = "✅ Captured!";
-                
-                if (_assistantWindow == null || !_assistantWindow.IsLoaded)
-                {
-                    _assistantWindow = new AssistantWindow(_translator, $"[SOURCE: {(isCdpConnected ? "CHROME_DOM" : "SCREEN_READER")}]\n{text}", this);
-                    _assistantWindow.Show();
+                    StatusText.Text = "CDP conectado";
+                    text = _chromeService.CaptureActiveTabContent();
+                    _chromeService.Disconnect();
                 }
                 else
                 {
-                    _assistantWindow.UpdateContext($"[SOURCE: {(isCdpConnected ? "CHROME_DOM" : "SCREEN_READER")}]\n{text}", true);
-                    _assistantWindow.Activate();
-                    if (_assistantWindow.WindowState == WindowState.Minimized) _assistantWindow.WindowState = WindowState.Normal;
+                    StatusText.Text = "Escaneando...";
+                    await Task.Delay(2000);
+                    text = await _browserScanner.GetSelectedTextAsync();
+                }
+
+                if (string.IsNullOrWhiteSpace(text) || text.StartsWith("Error") || text.StartsWith("Debug"))
+                {
+                    StatusText.Text = isCdpConnected ? "Sin contenido CDP" : "Escaneo fallido";
+                }
+                else
+                {
+                    StatusText.Text = "Contenido capturado";
+                    string captureContext = $"[SOURCE: {(isCdpConnected ? "CHROME_DOM" : "SCREEN_READER")}]\n{text}";
+                    if (!_isAssistantOpen)
+                        ToggleAssistantPanel();
+                    else
+                    {
+                        AssistantContextText.Text = captureContext;
+                        _ = LoadAssistantSuggestionsAsync();
+                    }
                 }
             }
+            catch (Exception ex) { AppLogger.Error("BrowserScan_Click", ex); }
         }
+
+        // ─── Summary ──────────────────────────────────────────────────────────
 
         private async void GenerateSummary_Click(object sender, RoutedEventArgs e)
         {
-            if (History.Count == 0)
-            {
-                StatusText.Text = "No history to summarize.";
-                return;
-            }
-
-            StatusText.Text = "Generating Summary...";
-
-            // Prepare transcript
-            var sb = new System.Text.StringBuilder();
-            foreach (var item in History)
-            {
-                 sb.AppendLine($"[{item.Timestamp:HH:mm}] {(item.SourceIcon == "\uE7F4" ? "Teacher" : "Student")}: {item.OriginalText}");
-            }
-
             try
             {
-                string summary = await _translator.GenerateSummaryAsync(sb.ToString());
-                
-                // Save to file
-                string filename = $"Class_Summary_{DateTime.Now:yyyyMMdd_HHmm}.md";
-                System.IO.File.WriteAllText(filename, summary);
-                
-                StatusText.Text = "Summary Saved!";
-                
-                // Open file automatically
-                try {
-                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = filename, UseShellExecute = true });
-                } catch {}
+                string full = TranscriptionText.Text.Trim();
+                if (string.IsNullOrWhiteSpace(full)) { StatusText.Text = "Sin transcripción para resumir."; return; }
+
+                StatusText.Text = "Generando resumen...";
+                string summary  = await _translator.GenerateSummaryAsync(full);
+                string filename = $"Resumen_Clase_{DateTime.Now:yyyyMMdd_HHmm}.md";
+                File.WriteAllText(filename, summary);
+                StatusText.Text = "Resumen guardado";
+                try
+                {
+                    System.Diagnostics.Process.Start(
+                        new System.Diagnostics.ProcessStartInfo { FileName = filename, UseShellExecute = true });
+                }
+                catch { }
             }
             catch (Exception ex)
             {
-                 StatusText.Text = "Summary Failed";
-                 MessageBox.Show(ex.Message);
+                StatusText.Text = "Error al generar resumen";
+                AppLogger.Error("GenerateSummary_Click", ex);
+                MessageBox.Show(ex.Message, "Error al generar resumen", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
+
+        // ─── Sessions ─────────────────────────────────────────────────────────
+
         private async Task CreateNewSessionAsync()
         {
-            string defaultTitle = $"Session {DateTime.Now:MMM dd, HH:mm}";
-            _currentSession = await _sessionService.CreateSessionAsync(defaultTitle);
-            
-            Dispatcher.Invoke(() => 
+            if (_currentSession != null && _currentSession.Entries.Count >= 3)
+                _ = GenerateAndSaveSummaryAsync(_currentSession);
+
+            string defaultTitle = $"Sesión {DateTime.Now:dd MMM, HH:mm}";
+            _currentSession = await _sessionService!.CreateSessionAsync(defaultTitle);
+
+            Dispatcher.Invoke(() =>
             {
                 CurrentSessionTitle.Text = _currentSession.Title;
-                // Clear history if new session
+                _autoTranslateCts?.Cancel();
+                _autoTranslationBuffer = "";
+                _previousSentence = "";
+                _captions.Reset();
                 History.Clear();
-                OriginalTextBlock.Text = "Listening...";
-                TranslatedTextBlock.Text = "";
+                ResetAssistantPanel();
             });
+        }
+
+        private async Task GenerateAndSaveSummaryAsync(Session session)
+        {
+            try
+            {
+                var transcript = string.Join("\n", session.Entries
+                    .OrderBy(e => e.Timestamp)
+                    .Take(25)
+                    .Select(e => $"{(e.Source == EntrySource.Microphone ? _userName : "Profesor")}: {e.OriginalText}"));
+
+                string summary = await _translator.GenerateShortSummaryAsync(transcript);
+                if (!string.IsNullOrWhiteSpace(summary))
+                {
+                    session.Summary = summary;
+                    await _sessionService!.SaveSessionAsync(session);
+                }
+            }
+            catch (Exception ex) { AppLogger.Error("GenerateAndSaveSummary", ex); }
         }
 
         private async void Sessions_Click(object sender, RoutedEventArgs e)
         {
-            if (SessionPanel.Visibility == Visibility.Visible)
+            try
             {
-                SessionPanel.Visibility = Visibility.Collapsed;
+                if (SessionPanel.Visibility == Visibility.Visible)
+                    SessionPanel.Visibility = Visibility.Collapsed;
+                else
+                {
+                    SettingsPanel.Visibility = Visibility.Collapsed;
+                    SuggestionsOverlay.Visibility = Visibility.Collapsed;
+                    SessionPanel.Visibility = Visibility.Visible;
+                    await RefreshSessionsList();
+                }
             }
-            else
-            {
-                // Close other panels
-                SettingsPanel.Visibility = Visibility.Collapsed;
-                SuggestionsOverlay.Visibility = Visibility.Collapsed;
-                
-                SessionPanel.Visibility = Visibility.Visible;
-                await RefreshSessionsList();
-            }
+            catch (Exception ex) { AppLogger.Error("Sessions_Click", ex); }
         }
-        
+
         private async Task RefreshSessionsList(string query = "")
         {
-            var sessions = await _sessionService.SearchSessionsAsync(query);
+            var sessions = await _sessionService!.SearchSessionsAsync(query);
             SessionsList.ItemsSource = sessions;
         }
 
         private async void NewSession_Click(object sender, RoutedEventArgs e)
         {
-            // Save current if needed (autosave handles it, but maybe force save?)
-            if (_currentSession != null)
+            try
             {
-                await _sessionService.SaveSessionAsync(_currentSession);
+                var confirm = MessageBox.Show("¿Crear una nueva sesión?\nLa sesión actual se guardará.",
+                    "Nueva sesión", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (confirm != MessageBoxResult.Yes) return;
+
+                if (_currentSession != null)
+                    await _sessionService!.SaveSessionAsync(_currentSession);
+
+                await CreateNewSessionAsync();
+                SessionPanel.Visibility = Visibility.Collapsed;
             }
-            
-            await CreateNewSessionAsync();
-            SessionPanel.Visibility = Visibility.Collapsed;
+            catch (Exception ex) { AppLogger.Error("NewSession_Click", ex); }
         }
 
-        private void CloseSessions_Click(object sender, RoutedEventArgs e)
-        {
+        private void CloseSessions_Click(object sender, RoutedEventArgs e) =>
             SessionPanel.Visibility = Visibility.Collapsed;
+
+        private async void DeleteSession_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (SessionsList.SelectedItem is not Session selected) return;
+
+                if (selected.Id == _currentSession?.Id)
+                {
+                    MessageBox.Show("No puedes eliminar la sesión activa.", "Eliminar",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                var confirm = MessageBox.Show($"¿Eliminar \"{selected.Title}\"?", "Confirmar eliminación",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (confirm != MessageBoxResult.Yes) return;
+
+                await _sessionService!.DeleteSessionAsync(selected.Id);
+                await RefreshSessionsList();
+            }
+            catch (Exception ex) { AppLogger.Error("DeleteSession_Click", ex); }
         }
 
         private async void SessionsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
-            if (SessionsList.SelectedItem is Session selectedSession)
+            try
             {
-                // Load session
-                var loaded = await _sessionService.LoadSessionAsync(selectedSession.Id);
-                if (loaded != null)
-                {
-                    _currentSession = loaded;
-                    _sessionService.StartAutoSave(_currentSession); // Switch auto-save to this session
-                    
-                    CurrentSessionTitle.Text = loaded.Title;
-                    
-                    // Populate History
-                    History.Clear();
-                    foreach(var entry in loaded.Entries.OrderBy(x => x.Timestamp))
-                    {
-                        AddToHistory(entry.OriginalText, entry.TranslatedText, 
-                            entry.Source == EntrySource.Microphone ? "\uE720" : "\uE7F4", 
-                            entry.Source == EntrySource.Microphone ? "#90EE90" : "#CCCCFF");
-                    }
-                    
-                    SessionPanel.Visibility = Visibility.Collapsed;
-                }
+                if (SessionsList.SelectedItem is not Session selectedSession) return;
+
+                var loaded = await _sessionService!.LoadSessionAsync(selectedSession.Id);
+                if (loaded == null) return;
+
+                _currentSession = loaded;
+                _sessionService.StartAutoSave(_currentSession);
+                CurrentSessionTitle.Text = loaded.Title;
+
+                var entries = loaded.Entries.OrderBy(x => x.Timestamp).ToList();
+                string committed = string.Join("\n", entries.Select(en => en.OriginalText));
+                _captions.LoadHistory(committed);
+
+                TranscriptionText.Text = committed;
+                TranslationText.Text   = string.Join("\n\n",
+                    entries.Where(en => !string.IsNullOrWhiteSpace(en.TranslatedText))
+                           .Select(en => en.TranslatedText));
+                TranslationStatus.Text = entries.Count > 0
+                    ? entries.Last().Timestamp.ToString("HH:mm") : "";
+
+                History.Clear();
+                SessionPanel.Visibility = Visibility.Collapsed;
             }
+            catch (Exception ex) { AppLogger.Error("SessionsList_MouseDoubleClick", ex); }
         }
 
         private void SearchSessionsBox_GotFocus(object sender, RoutedEventArgs e)
@@ -1018,72 +1355,115 @@ namespace WindowsLiveCaptionsReader
 
         private async void SearchSessionsBox_KeyUp(object sender, KeyEventArgs e)
         {
-             string query = SearchSessionsBox.Text == "Buscar..." ? "" : SearchSessionsBox.Text;
-             await RefreshSessionsList(query);
+            try
+            {
+                string query = SearchSessionsBox.Text == "Buscar..." ? "" : SearchSessionsBox.Text;
+                await RefreshSessionsList(query);
+            }
+            catch (Exception ex) { AppLogger.Error("SearchSessionsBox_KeyUp", ex); }
         }
 
         private async void ExportSession_Click(object sender, RoutedEventArgs e)
         {
-            Session sessionToExport = SessionsList.SelectedItem as Session;
-            
-            if (sessionToExport == null)
+            try
             {
-                // Fallback to current session if valid
-                if (_currentSession != null)
+                Session? sessionToExport = SessionsList.SelectedItem as Session;
+
+                if (sessionToExport == null)
                 {
-                    if (MessageBox.Show("No session selected in list. Export current active session?", "Export", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                    if (_currentSession == null)
                     {
-                        sessionToExport = _currentSession;
-                    }
-                    else
-                    {
+                        MessageBox.Show("Selecciona una sesión para exportar.", "Export",
+                            MessageBoxButton.OK, MessageBoxImage.Warning);
                         return;
                     }
+                    if (MessageBox.Show("No hay sesión seleccionada. ¿Exportar la sesión activa?", "Export",
+                            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                    sessionToExport = _currentSession;
                 }
-                else
+
+                var dialog = new SaveFileDialog
                 {
-                    MessageBox.Show("Please select a session to export.", "Export", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
+                    Title  = "Exportar sesión a Markdown",
+                    Filter = "Markdown Files (*.md)|*.md|All Files (*.*)|*.*",
+                    FileName = $"Session_{sessionToExport.StartTime:yyyyMMdd_HHmm}.md"
+                };
+
+                if (dialog.ShowDialog() != true) return;
+
+                string content = await _sessionService!.ExportToMarkdownAsync(sessionToExport.Id);
+                await File.WriteAllTextAsync(dialog.FileName, content);
+                MessageBox.Show("Exportación exitosa.", "Export", MessageBoxButton.OK, MessageBoxImage.Information);
             }
-
-            var dialog = new SaveFileDialog
+            catch (Exception ex)
             {
-                Title = "Export Session to Markdown",
-                Filter = "Markdown Files (*.md)|*.md|All Files (*.*)|*.*",
-                FileName = $"Session_{sessionToExport.StartTime:yyyyMMdd_HHmm}.md"
-            };
-
-            if (dialog.ShowDialog() == true)
-            {
-                try
-                {
-                    string content = await _sessionService.ExportToMarkdownAsync(sessionToExport.Id);
-                    await File.WriteAllTextAsync(dialog.FileName, content);
-                    MessageBox.Show("Export successful!", "Export", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Export failed: {ex.Message}", "Export", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
+                AppLogger.Error("ExportSession_Click", ex);
+                MessageBox.Show($"Error al exportar: {ex.Message}", "Export", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
         private void Vocabulary_Click(object sender, RoutedEventArgs e)
         {
             var vocabWin = new VocabularyWindow(_vocabularyService);
-            vocabWin.Owner = this;
+            vocabWin.Topmost = true;
             vocabWin.ShowDialog();
+        }
+
+        // ─── DWM blur-behind ──────────────────────────────────────────────────
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DWM_BLURBEHIND
+        {
+            public uint   dwFlags;
+            public bool   fEnable;
+            public IntPtr hRgnBlur;
+            public bool   fTransitionOnMaximized;
+        }
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmEnableBlurBehindWindow(IntPtr hwnd, ref DWM_BLURBEHIND pBlurBehind);
+
+        private void ApplyBlurBehind()
+        {
+            try
+            {
+                var hwnd = new WindowInteropHelper(this).Handle;
+                var blur = new DWM_BLURBEHIND { dwFlags = 0x01, fEnable = true, hRgnBlur = IntPtr.Zero };
+                DwmEnableBlurBehindWindow(hwnd, ref blur);
+            }
+            catch { }
         }
     }
 
-    public class TranslationItem
+    public record QuestionJob(string Sentence, QuestionDetectionResult Detection);
+
+    public class AssistantSuggestion
     {
+        public string Title         { get; set; } = "";
+        public string Text          { get; set; } = "";
+        public string Translation   { get; set; } = "";
+        public string Pronunciation { get; set; } = "";
+    }
+
+    public class TranslationItem : System.ComponentModel.INotifyPropertyChanged
+    {
+        private string _translatedText = "";
+
         public string OriginalText { get; set; } = "";
-        public string TranslatedText { get; set; } = "";
+        public string TranslatedText
+        {
+            get => _translatedText;
+            set
+            {
+                _translatedText = value;
+                PropertyChanged?.Invoke(this,
+                    new System.ComponentModel.PropertyChangedEventArgs(nameof(TranslatedText)));
+            }
+        }
         public DateTime Timestamp { get; set; }
-        public string SourceIcon { get; set; } = "\uE7F4"; // Default to CC (Captions)
+        public string SourceIcon  { get; set; } = "";
         public string SourceColor { get; set; } = "White";
-         // End of TranslationItem
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }
 }

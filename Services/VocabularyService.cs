@@ -12,12 +12,12 @@ namespace WindowsLiveCaptionsReader.Services
     public class VocabularyService : IDisposable
     {
         private readonly AppDbContext _context;
-        private readonly OllamaService _ollama;
+        private readonly LmStudioService _lmStudio;
 
-        public VocabularyService(OllamaService ollama)
+        public VocabularyService(LmStudioService lmStudio)
         {
             _context = new AppDbContext();
-            _ollama = ollama;
+            _lmStudio = lmStudio;
         }
 
         public async Task InitializeAsync()
@@ -91,8 +91,8 @@ namespace WindowsLiveCaptionsReader.Services
         {
             if (string.IsNullOrWhiteSpace(text) || text.Length < 20) return new List<string>();
 
-            // Use Ollama to suggest vocabulary
-            var result = await _ollama.GenerateVocabularyExtractionAsync(text);
+            // Use LM Studio to suggest vocabulary
+            var result = await _lmStudio.GenerateVocabularyExtractionAsync(text);
             
             // Parse result "Word|Definition|Translation"
             var lines = result.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);

@@ -92,7 +92,8 @@ namespace WindowsLiveCaptionsReader.Services
             
             var lowerQuery = query.ToLower();
             return await _context.Sessions
-                .Where(s => s.Title.ToLower().Contains(lowerQuery) || s.Summary.ToLower().Contains(lowerQuery))
+                .Where(s => s.Title.ToLower().Contains(lowerQuery) ||
+                            (s.Summary != null && s.Summary.ToLower().Contains(lowerQuery)))
                 .OrderByDescending(s => s.StartTime)
                 .ToListAsync();
         }

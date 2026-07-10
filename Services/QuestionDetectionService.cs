@@ -2,122 +2,194 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using WindowsLiveCaptionsReader.Models;
 
 namespace WindowsLiveCaptionsReader.Services
 {
+    /// <summary>Holds the result of question detection including a 0-1 confidence score.</summary>
+    public class QuestionDetectionResult
+    {
+        public bool IsQuestion        { get; set; }
+        public float Confidence       { get; set; }   // 0.0 – 1.0
+        public QuestionType Type      { get; set; }
+        public string DetectedVia     { get; set; } = "";  // "L1", "L2", "L3", "L4-AI"
+        public bool IsDirectedAtUser  { get; set; }   // true when user's name appears in the text
+    }
+
     public class QuestionDetectionService
     {
-        private readonly OllamaService _ollamaService;
+        private readonly LmStudioService _lmStudioService;
 
-        // Level 1: Direct Markers (Strongest)
-        private static readonly string[] _whWords = { "who", "what", "where", "when", "why", "how", "which", "whose", "whom" };
-        private static readonly string[] _auxiliaryVerbs = { "do", "does", "did", "is", "are", "was", "were", "can", "could", "will", "would", "shall", "should", "may", "might", "must", "have", "has", "had" };
+        // Level 1: Direct Markers (Strongest) — English
+        private static readonly string[] _whWords =
+            { "who", "what", "where", "when", "why", "how", "which", "whose", "whom" };
+        private static readonly string[] _auxiliaryVerbs =
+            { "do", "does", "did", "is", "are", "was", "were", "can", "could",
+              "will", "would", "shall", "should", "may", "might", "must", "have", "has", "had" };
 
-        // Level 3: Indirect Indicators
-        private static readonly string[] _indirectStarters = { 
-            "i wonder", "i was wondering", "could you tell me", "do you know", 
-            "i'd like to know", "can you explain", "please explain" 
+        // Spanish WH-words (with and without accents — ASR may omit them)
+        private static readonly string[] _whWordsEs =
+            { "qué", "que", "quién", "quien", "quiénes", "quienes",
+              "cuándo", "cuando", "dónde", "donde", "cómo", "como",
+              "cuál", "cual", "cuáles", "cuales", "cuánto", "cuanto",
+              "cuánta", "cuanta", "cuántos", "cuantos", "cuántas", "cuantas" };
+
+        // Spanish auxiliary / copula verbs at sentence start
+        private static readonly string[] _auxiliaryVerbsEs =
+            { "es", "son", "fue", "era", "están", "está", "puede", "pueden",
+              "tiene", "tienes", "sabe", "sabes", "hay", "vas", "van", "eres" };
+
+        // Level 3: Indirect patterns — English + Spanish
+        private static readonly string[] _indirectStarters =
+        {
+            "i wonder", "i was wondering", "could you tell me", "do you know",
+            "i'd like to know", "can you explain", "please explain",
+            "me pregunto", "podrías decirme", "sabes si", "podrías explicar",
+            "quisiera saber", "puedes decirme", "puedes explicar"
         };
 
-        public QuestionDetectionService(OllamaService ollamaService)
+        // Tag-question suffix patterns (e.g. "…, right?", "…, isn't it?")
+        private static readonly Regex _tagQuestionRegex =
+            new(@",\s*(right|isn'?t it|aren'?t you|don'?t you|won'?t you|could you|can you)\??\s*$",
+                RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        public QuestionDetectionService(LmStudioService lmStudioService)
         {
-            _ollamaService = ollamaService;
+            _lmStudioService = lmStudioService;
         }
 
+        // ── Public: main entry point for the capture flow ────────────────────
         public async Task<DetectedQuestion?> AnalyzeTextAsync(string text, int sessionId, int entryId)
         {
             if (string.IsNullOrWhiteSpace(text)) return null;
 
-            string cleanText = text.Trim().ToLowerInvariant();
-            
-            // Level 1: Explicit Question Mark
-            if (cleanText.EndsWith("?"))
+            var result = await AnalyzeWithConfidenceAsync(text);
+            if (!result.IsQuestion) return null;
+
+            return CreateQuestion(text, sessionId, entryId, result.Type, result.DetectedVia);
+        }
+
+        /// <summary>
+        /// Full cascade detection returning a confidence score.
+        /// Callers can use Confidence to decide badge visibility vs. auto-triggering assistant.
+        /// Set skipAI=true to skip the Level-4 LM Studio call (L4 confidence is 0.60, below the
+        /// 0.70 threshold used by DetectAndRespondAsync, so the call would always be discarded).
+        /// </summary>
+        public async Task<QuestionDetectionResult> AnalyzeWithConfidenceAsync(
+            string text, string? userName = null, CancellationToken token = default, bool skipAI = false)
+        {
+            string clean = text.Trim().ToLowerInvariant();
+
+            // ── Level 1: Explicit question mark ──────────────────────────────
+            if (clean.EndsWith("?"))
             {
-                 // Classify based on start word even if it has ?
-                 string type = "Direct";
-                 var firstWord = cleanText.Split(' ')[0];
-                 QuestionType qType = QuestionType.Direct;
-                 
-                 if (_whWords.Contains(firstWord)) qType = QuestionType.WhQuestion;
-                 else if (_auxiliaryVerbs.Contains(firstWord)) qType = QuestionType.YesNo;
-                 
-                 return CreateQuestion(text, sessionId, entryId, qType, "Explicit question mark");
+                var firstWord = clean.Split(' ')[0];
+                var qType = _whWords.Contains(firstWord) ? QuestionType.WhQuestion
+                          : _auxiliaryVerbs.Contains(firstWord) ? QuestionType.YesNo
+                          : QuestionType.Direct;
+                return EnrichWithUserName(new QuestionDetectionResult
+                    { IsQuestion = true, Confidence = 0.95f, Type = qType, DetectedVia = "L1" },
+                    text, userName);
             }
 
-            // Level 2: Structural Patterns (5Ws / Aux at start without ?)
-            string startWord = cleanText.Split(' ')[0];
-            if (_whWords.Contains(startWord))
-            {
-                if (cleanText.Split(' ').Length > 2)
-                    return CreateQuestion(text, sessionId, entryId, QuestionType.WhQuestion, $"Starts with '{startWord}'");
-            }
-            if (_auxiliaryVerbs.Contains(startWord))
-            {
-                if (cleanText.Split(' ').Length > 2) // "Is it?" is 2 words, might be valid. > 2 is safer.
-                    return CreateQuestion(text, sessionId, entryId, QuestionType.YesNo, $"Starts with '{startWord}'");
-            }
+            // ── Level 2: Structural — WH or Aux at sentence start ────────────
+            string startWord = clean.Split(' ')[0];
+            int wordCount = clean.Split(' ').Length;
 
-            // Level 3: Indirect Questions
+            if ((_whWords.Contains(startWord) || _whWordsEs.Contains(startWord)) && wordCount > 2)
+                return EnrichWithUserName(new QuestionDetectionResult
+                    { IsQuestion = true, Confidence = 0.85f, Type = QuestionType.WhQuestion, DetectedVia = "L2" },
+                    text, userName);
+
+            if ((_auxiliaryVerbs.Contains(startWord) || _auxiliaryVerbsEs.Contains(startWord)) && wordCount > 2)
+                return EnrichWithUserName(new QuestionDetectionResult
+                    { IsQuestion = true, Confidence = 0.80f, Type = QuestionType.YesNo, DetectedVia = "L2" },
+                    text, userName);
+
+            // ── Level 2b: Tag questions ───────────────────────────────────────
+            if (_tagQuestionRegex.IsMatch(text))
+                return EnrichWithUserName(new QuestionDetectionResult
+                    { IsQuestion = true, Confidence = 0.85f, Type = QuestionType.TagQuestion, DetectedVia = "L2b" },
+                    text, userName);
+
+            // ── Level 3: Indirect question starters ──────────────────────────
             foreach (var starter in _indirectStarters)
             {
-                if (cleanText.StartsWith(starter))
-                {
-                    return CreateQuestion(text, sessionId, entryId, QuestionType.Indirect, $"Starts with '{starter}'");
-                }
+                if (clean.StartsWith(starter))
+                    return EnrichWithUserName(new QuestionDetectionResult
+                        { IsQuestion = true, Confidence = 0.70f, Type = QuestionType.Indirect, DetectedVia = "L3" },
+                        text, userName);
             }
 
-            // Level 4: Semantics/AI Verification (Only if ambiguous but likely)
-            // Use with caution in real-time. Call IsQuestionViaAI explicitly from UI if needed, 
-            // or if we have a heuristic like "rising intonation" (not available here).
-            
-            return null;
-        }
-
-        private DetectedQuestion CreateQuestion(string text, int sessionId, int entryId, QuestionType type, string context)
-        {
-            return new DetectedQuestion
+            // ── Level 4: AI verification (only for texts likely to be questions) ──
+            // Heuristic gate: at least 4 words and no obvious statement structure
+            if (!skipAI && wordCount >= 4)
             {
-                SessionId = sessionId,
-                EntryId = entryId,
-                QuestionText = text,
-                Type = type,
-                Context = context,
-                DetectedAt = DateTime.Now,
-                WasAnswered = false
-            };
+                bool aiSays = await IsQuestionViaAI(text, token);
+                if (aiSays)
+                    return EnrichWithUserName(new QuestionDetectionResult
+                        { IsQuestion = true, Confidence = 0.75f, Type = QuestionType.Indirect, DetectedVia = "L4-AI" },
+                        text, userName);
+            }
+
+            return new QuestionDetectionResult { IsQuestion = false, Confidence = 0f };
         }
 
-        // Level 4: AI Verification
-        public async Task<bool> IsQuestionViaAI(string text)
+        // ── Level 4: AI Verification (now fully implemented) ─────────────────
+        /// <summary>
+        /// Calls LM Studio with a strict classification prompt.
+        /// Returns true only if the model replies "YES".
+        /// </summary>
+        public async Task<bool> IsQuestionViaAI(string text, CancellationToken token = default)
         {
+            const string system = "You are a strict linguistic classifier. " +
+                "Determine if the following English sentence is a question directed at someone " +
+                "(including indirect questions and implicit requests). " +
+                "Reply with ONLY the single word YES or NO. No punctuation, no explanation.";
+
+            string userPrompt = $"Sentence: \"{text}\"";
+
             try
             {
-                // Requires a simple completion or chat request
-                // Using a very strict prompt
-                string prompt = $"Analyze the following text and determine if it is a question asked by a teacher to a student. Reply ONLY with 'YES' or 'NO'.\n\nText: \"{text}\"\n\nAnswer:";
-                
-                // Using the specific Chat method if exists (assuming default model)
-                // Since we don't have a direct "Ask" method exposed that returns just string easily without JSON parsing overhead in the client, 
-                // we'll reuse TranslateStreamAsync with a non-stream callback or implemented Generate logic.
-                // But OllamaService has GenerateSuggestionsAsync which uses ChatUrl. I'll implement a helper here if needed or use what's available.
-                // I'll assume we can use a raw http call here or extend OllamaService. 
-                // For now, I'll rely on a basic heuristics in this method to avoid circular dependency or complex method injection if OllamaService isn't ready for this.
-                // Actually, let's use the OllamaService instance.
-                
-                // Hack: We can reusing TranslateAsync logic but with our prompt if the service allows generic prompts.
-                // The current TranslateStreamAsync forces "Translate this text...".
-                // I should add a GenericChatAsync method to OllamaService, but for now I can't modify it easily without context switching.
-                // I'll skip actual AI call implementation for this iteration and return false, 
-                // OR good regex is usually enough.
-                
-                return false; 
+                string answer = await _lmStudioService.AskAsync(system, userPrompt, token);
+                return answer.Trim().ToUpper().StartsWith("YES");
             }
             catch
             {
-                return false;
+                return false;   // fail-safe: don't flood assistant on error
             }
+        }
+
+        // ── Private helpers ───────────────────────────────────────────────────
+
+        private static QuestionDetectionResult EnrichWithUserName(
+            QuestionDetectionResult result, string text, string? userName)
+        {
+            if (!string.IsNullOrWhiteSpace(userName) &&
+                text.Contains(userName, StringComparison.OrdinalIgnoreCase))
+            {
+                result.IsDirectedAtUser = true;
+                // Boost confidence when the user's name is explicitly mentioned
+                result.Confidence = Math.Max(result.Confidence, 0.92f);
+            }
+            return result;
+        }
+
+        private DetectedQuestion CreateQuestion(
+            string text, int sessionId, int entryId, QuestionType type, string context)
+        {
+            return new DetectedQuestion
+            {
+                SessionId    = sessionId,
+                EntryId      = entryId,
+                QuestionText = text,
+                Type         = type,
+                Context      = context,
+                DetectedAt   = DateTime.Now,
+                WasAnswered  = false
+            };
         }
     }
 }
