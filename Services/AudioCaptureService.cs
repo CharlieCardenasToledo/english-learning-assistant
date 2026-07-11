@@ -36,7 +36,7 @@ namespace WindowsLiveCaptionsReader.Services
         private const int MaxBufferSeconds = 4;
         // Below this peak level the chunk is treated as silence and skipped —
         // Whisper hallucinates phrases ("Thank you.") on silent audio.
-        private const float SilencePeakThreshold = 0.015f;
+        private const float SilencePeakThreshold = 0.01f;
         private float _chunkPeak;
 
         public class AudioDevice
@@ -56,7 +56,12 @@ namespace WindowsLiveCaptionsReader.Services
 
         public List<AudioDevice> GetMicrophones()
         {
-            var list = new List<AudioDevice>();
+            var list = new List<AudioDevice>
+            {
+                // WAVE_MAPPER: Windows routes to whatever the current default input is,
+                // including headsets/BT mics plugged in after the app started.
+                new() { Index = -1, Name = "🎙 Predeterminado de Windows" },
+            };
             for (int i = 0; i < WaveIn.DeviceCount; i++)
             {
                 var cap = WaveIn.GetCapabilities(i);
@@ -89,11 +94,20 @@ namespace WindowsLiveCaptionsReader.Services
                     await _whisper.InitializeAsync();
                 }
 
+                // -1 = WAVE_MAPPER: Windows default input device. Never force index 0 —
+                // it's just the first enumerated device, often not the active mic,
+                // which silently records nothing but silence.
                 _waveIn = new WaveInEvent
                 {
-                    DeviceNumber       = Math.Max(_selectedDeviceIndex, 0),
+                    DeviceNumber       = _selectedDeviceIndex,
                     WaveFormat         = CaptureFormat,
                     BufferMilliseconds = 100,
+                };
+
+                _waveIn.RecordingStopped += (_, e) =>
+                {
+                    if (e.Exception != null)
+                        StatusChanged?.Invoke(this, $"Mic Error: {e.Exception.Message}");
                 };
 
                 _waveIn.DataAvailable += (_, e) =>
