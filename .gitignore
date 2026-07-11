@@ -24,8 +24,9 @@ Resumen_Clase_*.md
 *.db
 .claude/
 output/
-installer/
+installer/Output/
 publish/
+publish_release/
 CLAUDE.md
 .rtfm/
 image copy.png
