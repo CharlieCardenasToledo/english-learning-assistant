@@ -12,10 +12,10 @@
     <Product>English Learning Assistant</Product>
     <Company>Charlie Cardenas Toledo</Company>
     <Copyright>Copyright © 2026</Copyright>
-    <Version>1.2.1</Version>
-    <AssemblyVersion>1.2.1.0</AssemblyVersion>
-    <FileVersion>1.2.1.0</FileVersion>
-    <Description>AI-powered English learning assistant for B1 students</Description>
+    <Version>1.2.2</Version>
+    <AssemblyVersion>1.2.2.0</AssemblyVersion>
+    <FileVersion>1.2.2.0</FileVersion>
+    <Description>AI-powered English learning assistant for language students</Description>
 
     <!-- Publishing Configuration -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -30,7 +30,6 @@
     <PackageReference Include="Interop.UIAutomationClient" Version="10.19041.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="Selenium.WebDriver" Version="4.40.0" />
-    <PackageReference Include="System.Speech" Version="10.0.2" />
     <!-- Whisper for high-quality local transcription -->
     <PackageReference Include="Whisper.net" Version="1.5.0" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.5.0" />
