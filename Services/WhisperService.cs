@@ -52,9 +52,8 @@ namespace WindowsLiveCaptionsReader.Services
             _minModelBytes = option.MinBytes;
             _modelPath    = Path.Combine(_modelFolder, _modelFileName);
 
-            _processor?.Dispose();
+            DisposeProcessorSafely();
             _whisperFactory?.Dispose();
-            _processor    = null;
             _whisperFactory = null;
         }
 
@@ -148,8 +147,25 @@ namespace WindowsLiveCaptionsReader.Services
 
         public void Dispose()
         {
-            _processor?.Dispose();
+            DisposeProcessorSafely();
             _whisperFactory?.Dispose();
+        }
+
+        // WhisperProcessor.Dispose() throws if a ProcessAsync enumeration is still
+        // running (e.g. closing the app mid-chunk). DisposeAsync waits for the
+        // in-flight transcription to finish first.
+        private void DisposeProcessorSafely()
+        {
+            var processor = _processor;
+            _processor = null;
+            if (processor == null) return;
+
+            try { processor.Dispose(); }
+            catch (Exception)
+            {
+                try { processor.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5)); }
+                catch { }
+            }
         }
     }
 }

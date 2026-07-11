@@ -220,6 +220,11 @@ namespace WindowsLiveCaptionsReader.Services
         public void Dispose()
         {
             Stop();
+            // Give an in-flight Whisper chunk a moment to finish so disposing the
+            // processor right after doesn't hit "Cannot dispose while processing".
+            var deadline = DateTime.UtcNow.AddSeconds(3);
+            while (_isTranscribing && DateTime.UtcNow < deadline)
+                Thread.Sleep(50);
             _buffer.Dispose();
         }
     }
