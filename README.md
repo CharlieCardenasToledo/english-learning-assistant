@@ -12,7 +12,7 @@
 
 ---
 
-![App screenshot](image.png)
+![App demo](demo.gif)
 
 ---
 

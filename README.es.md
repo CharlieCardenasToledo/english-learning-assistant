@@ -12,7 +12,7 @@
 
 ---
 
-![Captura de pantalla](image.png)
+![Demostración de la app](demo.gif)
 
 ---
 
