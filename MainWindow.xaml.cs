@@ -64,6 +64,13 @@ namespace WindowsLiveCaptionsReader
         private static readonly TimeSpan AutoTranslateTimeout     = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan L4ClassificationTimeout  = TimeSpan.FromSeconds(15);
         private string _previousSentence = "";
+        // Committed caption fragments accumulate here until the sentence is complete:
+        // either it ends with terminal punctuation, or captions go quiet for
+        // SentenceSettleDelay (speaker paused) — then the whole thing is processed at
+        // once so the question detector always sees the FULL question, never a half.
+        private readonly List<string> _fragmentBuffer = new();
+        private DispatcherTimer _settleTimer = null!;
+        private static readonly TimeSpan SentenceSettleDelay = TimeSpan.FromSeconds(1.2);
 
         // ─── Session ──────────────────────────────────────────────────────────
         private Session? _currentSession;
@@ -133,6 +140,9 @@ namespace WindowsLiveCaptionsReader
                 Dispatcher.Invoke(() => { if (_isMicActive) StatusText.Text = $"Mic: {status}"; });
             _micService.AudioLevelChanged += (s, level) =>
                 Dispatcher.Invoke(() => { if (MicLevelBar != null) MicLevelBar.Value = level; });
+
+            _settleTimer = new DispatcherTimer { Interval = SentenceSettleDelay };
+            _settleTimer.Tick += SettleTimer_Tick;
 
             Loaded += MainWindow_Loaded;
         }
@@ -245,16 +255,20 @@ namespace WindowsLiveCaptionsReader
 
         private void AppendCaption(string newCaption, bool isMic = false)
         {
-            // Snapshot the pending sentence before Feed() commits it
-            string pendingSnapshot = _captions.Pending;
             string? committed = _captions.Feed(newCaption);
 
             if (committed != null)
             {
-                _previousSentence = committed;
-                _ = ProcessSentenceAsync(committed);
-                _ = AutoTranslateSentenceAsync(committed);
+                _fragmentBuffer.Add(committed);
+                // Complete sentence — process right away (fast path).
+                // Otherwise hold the fragment; the settle timer will flush it.
+                if (EndsSentence(committed)) FlushFragmentBuffer();
             }
+
+            // Every caption update restarts the timer; when it fires, captions have
+            // been quiet for SentenceSettleDelay — the speaker finished the sentence.
+            _settleTimer.Stop();
+            _settleTimer.Start();
 
             TranscriptionText.Text = _captions.GetDisplayText();
             StatusText.Text = isMic ? "Mic..." : "Live Captions";
@@ -263,12 +277,45 @@ namespace WindowsLiveCaptionsReader
                 TranscriptionScrollViewer.ScrollToBottom();
         }
 
+        private void SettleTimer_Tick(object? sender, EventArgs e)
+        {
+            _settleTimer.Stop();
+            string? forced = _captions.ForceCommitPending();
+            if (forced != null)
+            {
+                _fragmentBuffer.Add(forced);
+                TranscriptionText.Text = _captions.GetDisplayText();
+            }
+            FlushFragmentBuffer();
+        }
+
+        // Joins buffered fragments into one sentence and sends it through detection
+        // and translation. The detector gets the full question, not the pieces.
+        private void FlushFragmentBuffer()
+        {
+            if (_fragmentBuffer.Count == 0) return;
+            string sentence = string.Join(" ", _fragmentBuffer).Trim();
+            _fragmentBuffer.Clear();
+            if (sentence.Length == 0) return;
+
+            string previous = _previousSentence;
+            _previousSentence = sentence;
+            _ = ProcessSentenceAsync(sentence, previous);
+            _ = AutoTranslateSentenceAsync(sentence);
+        }
+
+        private static bool EndsSentence(string s)
+        {
+            s = s.TrimEnd();
+            return s.Length > 0 && (s[^1] == '.' || s[^1] == '?' || s[^1] == '!');
+        }
+
         // ─── Question detection pipeline ──────────────────────────────────────
 
         // Runs on a thread-pool thread (fire-and-forget from AppendCaption).
         // L1-L3 detection is regex-only (<1ms). L4-AI runs in the background
         // without blocking this method or the generation worker.
-        private async Task ProcessSentenceAsync(string sentence)
+        private async Task ProcessSentenceAsync(string sentence, string previousSentence = "")
         {
             try
             {
@@ -277,9 +324,9 @@ namespace WindowsLiveCaptionsReader
                     sentence, _userName, CancellationToken.None, skipAI: true);
 
                 // Fragmentation retry: combine with previous sentence if still uncertain
-                if (result.Confidence < 0.70f && !string.IsNullOrEmpty(_previousSentence))
+                if (result.Confidence < 0.70f && !string.IsNullOrEmpty(previousSentence))
                 {
-                    string combined = _previousSentence + " " + sentence;
+                    string combined = previousSentence + " " + sentence;
                     var combinedResult = await _questionService.AnalyzeWithConfidenceAsync(
                         combined, _userName, CancellationToken.None, skipAI: true);
                     if (combinedResult.Confidence > result.Confidence)
@@ -1268,6 +1315,8 @@ namespace WindowsLiveCaptionsReader
             _autoTranslateCts?.Cancel();
             _autoTranslationBuffer = "";
             _previousSentence = "";
+            _settleTimer.Stop();
+            _fragmentBuffer.Clear();
             _captions.Reset();
             History.Clear();
             ResetAssistantPanel();
@@ -1390,6 +1439,8 @@ namespace WindowsLiveCaptionsReader
                 _autoTranslateCts?.Cancel();
                 _autoTranslationBuffer = "";
                 _previousSentence = "";
+                _settleTimer.Stop();
+                _fragmentBuffer.Clear();
                 _captions.Reset();
                 History.Clear();
                 ResetAssistantPanel();

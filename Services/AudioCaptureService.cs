@@ -83,10 +83,11 @@ namespace WindowsLiveCaptionsReader.Services
                     _recognizer.LoadGrammar(new DictationGrammar());
                     
                     // Hook events for debugging
-                    _recognizer.SpeechRecognized += (s, e) => 
+                    _recognizer.SpeechRecognized += (s, e) =>
                     {
-                        // STRICT MODE: Only accept high confidence execution to avoid noise
-                        if (e.Result.Confidence > 0.8) 
+                        // 0.8 rejected almost everything from System.Speech dictation
+                        // (typical scores are 0.5-0.7) — the mic looked dead.
+                        if (e.Result.Confidence > 0.5)
                         {
                             TextCaptured?.Invoke(this, e.Result.Text);
                         }

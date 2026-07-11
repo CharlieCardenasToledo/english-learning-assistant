@@ -13,6 +13,9 @@ namespace WindowsLiveCaptionsReader.Services
         private string _committed = "";
         private string _pending = "";
         private string _fullTranscription = "";
+        // Raw pending text at the moment of a forced commit, so Feed() can strip it
+        // if Live Captions keeps extending the same line after the pause.
+        private string _forceCommitted = "";
 
         public string Pending => _pending;
         public string FullTranscription => _fullTranscription;
@@ -26,6 +29,21 @@ namespace WindowsLiveCaptionsReader.Services
         /// </summary>
         public string? Feed(string newCaption)
         {
+            // After a forced commit, Live Captions may resend the same line extended —
+            // strip the part we already committed so it isn't duplicated.
+            if (_forceCommitted.Length > 0)
+            {
+                if (newCaption.StartsWith(_forceCommitted))
+                {
+                    newCaption = newCaption[_forceCommitted.Length..].TrimStart();
+                    if (newCaption.Length == 0) return null;
+                }
+                else
+                {
+                    _forceCommitted = ""; // a genuinely new line started
+                }
+            }
+
             if (newCaption == _pending) return null;
 
             bool isNewSentence = !string.IsNullOrEmpty(_pending)
@@ -35,26 +53,45 @@ namespace WindowsLiveCaptionsReader.Services
             if (isNewSentence)
             {
                 string committed = _pending;
-
-                _fullTranscription = string.IsNullOrEmpty(_fullTranscription)
-                    ? committed
-                    : _fullTranscription + "\n" + committed;
-
-                string newCommitted = string.IsNullOrEmpty(_committed)
-                    ? committed
-                    : _committed + "\n" + committed;
-
-                var lines = newCommitted.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                _committed = lines.Length > MaxCommittedLines
-                    ? string.Join("\n", lines[^MaxCommittedLines..])
-                    : newCommitted;
-
+                CommitLine(committed);
                 _pending = newCaption;
                 return committed;
             }
 
             _pending = newCaption;
             return null;
+        }
+
+        /// <summary>
+        /// Commits the pending line without waiting for a new caption line.
+        /// Called when captions stop changing (speaker paused) so trailing
+        /// sentences — typically questions — don't sit unprocessed.
+        /// </summary>
+        public string? ForceCommitPending()
+        {
+            if (string.IsNullOrWhiteSpace(_pending) || _pending.Trim().Length < 2) return null;
+
+            string committed = _pending.Trim();
+            CommitLine(committed);
+            _forceCommitted = _pending;
+            _pending = "";
+            return committed;
+        }
+
+        private void CommitLine(string committed)
+        {
+            _fullTranscription = string.IsNullOrEmpty(_fullTranscription)
+                ? committed
+                : _fullTranscription + "\n" + committed;
+
+            string newCommitted = string.IsNullOrEmpty(_committed)
+                ? committed
+                : _committed + "\n" + committed;
+
+            var lines = newCommitted.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            _committed = lines.Length > MaxCommittedLines
+                ? string.Join("\n", lines[^MaxCommittedLines..])
+                : newCommitted;
         }
 
         public string GetRecentContext(int maxLines = 15)
@@ -77,6 +114,7 @@ namespace WindowsLiveCaptionsReader.Services
             _committed = "";
             _pending = "";
             _fullTranscription = "";
+            _forceCommitted = "";
         }
     }
 }
