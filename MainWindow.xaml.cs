@@ -27,6 +27,7 @@ namespace WindowsLiveCaptionsReader
         // error dialog and runs degraded — callers already guard with null checks.
         private CaptionReader _reader = null!;
         private LmStudioService _translator;
+        private WhisperService _whisperService;
         private AudioCaptureService _micService;
         private SessionService _sessionService = null!;
         private QuestionDetectionService _questionService = null!;
@@ -113,7 +114,8 @@ namespace WindowsLiveCaptionsReader
             InitializeComponent();
             History = new ObservableCollection<TranslationItem>();
             _translator = new LmStudioService("llama-3.2-3b-instruct");
-            _micService = new AudioCaptureService();
+            _whisperService = new WhisperService();
+            _micService = new AudioCaptureService(_whisperService);
 
             try
             {
@@ -188,7 +190,8 @@ namespace WindowsLiveCaptionsReader
         {
             _pipelineShutdown.Cancel();
             _reader?.Stop();
-            _micService.StopListening();
+            _micService.Dispose();
+            _whisperService.Dispose();
             _sessionService?.Dispose();
             _vocabularyService?.Dispose();
             _libreTranslate.StopServer();

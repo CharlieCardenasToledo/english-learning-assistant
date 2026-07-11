@@ -1,22 +1,43 @@
 using System;
 using System.Collections.Generic;
-using System.Speech.Recognition;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using NAudio.Wave;
-using System.Linq;
 
 namespace WindowsLiveCaptionsReader.Services
 {
+    /// <summary>
+    /// Captures the microphone with NAudio and transcribes it in chunks with Whisper.
+    /// System.Speech (SAPI) is NOT used: modern Windows 11 builds ship 0 installed
+    /// recognizers (legacy Windows Speech Recognition was removed in favor of Voice
+    /// Access), so dictation via System.Speech silently captures nothing.
+    /// Mirrors the chunking strategy of <see cref="SystemAudioCaptureService"/>.
+    /// </summary>
     public class AudioCaptureService : IDisposable
     {
         public event EventHandler<string>? TextCaptured;
         public event EventHandler<string>? StatusChanged;
-        public event EventHandler<float>? AudioLevelChanged; // New for validation
+        public event EventHandler<float>? AudioLevelChanged;
 
-        private SpeechRecognitionEngine? _recognizer;
+        private readonly WhisperService _whisper;
+        private WaveInEvent? _waveIn;
+        private MemoryStream _buffer = new();
+        private readonly object _lock = new();
+        private Timer? _transcribeTimer;
+        private readonly string _tempFile;
         private int _selectedDeviceIndex = -1;
-        private bool _isListening;
+        private bool _isRunning;
+        private volatile bool _isTranscribing;
+
+        // 16kHz mono 16-bit — exactly what Whisper wants, no resampling needed
+        private static readonly WaveFormat CaptureFormat = new(16000, 16, 1);
+        private const int ChunkIntervalMs  = 2000;
+        private const int MaxBufferSeconds = 4;
+        // Below this peak level the chunk is treated as silence and skipped —
+        // Whisper hallucinates phrases ("Thank you.") on silent audio.
+        private const float SilencePeakThreshold = 0.015f;
+        private float _chunkPeak;
 
         public class AudioDevice
         {
@@ -24,8 +45,15 @@ namespace WindowsLiveCaptionsReader.Services
             public string Name { get; set; } = "";
         }
 
-        public void StopListening() => Stop(); // Alias to fix build error
-        
+        public AudioCaptureService(WhisperService whisper)
+        {
+            _whisper  = whisper;
+            _tempFile = Path.Combine(Path.GetTempPath(), "ela_mic.wav");
+            _whisper.DownloadProgress += (_, msg) => StatusChanged?.Invoke(this, msg);
+        }
+
+        public void StopListening() => Stop();
+
         public List<AudioDevice> GetMicrophones()
         {
             var list = new List<AudioDevice>();
@@ -40,91 +68,54 @@ namespace WindowsLiveCaptionsReader.Services
         public void SetDevice(int deviceIndex)
         {
             _selectedDeviceIndex = deviceIndex;
-            if (_isListening)
+            if (_isRunning)
             {
                 Stop();
                 Start();
             }
         }
 
-        public void Start()
+        public void Start() => _ = StartAsync();
+
+        private async Task StartAsync()
         {
-            if (_isListening) return;
+            if (_isRunning) return;
 
             try
             {
-                // Init Engine
-                if (_recognizer == null)
+                if (!_whisper.IsModelLoaded)
                 {
-                    // Find logical recognizer
-                    var recognizers = SpeechRecognitionEngine.InstalledRecognizers();
-                    RecognizerInfo? selectedInfo = null;
-                    
-                    // Try en-US
-                    selectedInfo = recognizers.FirstOrDefault(r => r.Culture.Name.Equals("en-US", StringComparison.OrdinalIgnoreCase));
-                    
-                    // Fallback to any English
-                    if (selectedInfo == null)
-                         selectedInfo = recognizers.FirstOrDefault(r => r.Culture.Name.StartsWith("en", StringComparison.OrdinalIgnoreCase));
-                         
-                    // Fallback to Default
-                    if (selectedInfo == null)
-                         selectedInfo = recognizers.FirstOrDefault();
+                    StatusChanged?.Invoke(this, "Cargando modelo Whisper...");
+                    await _whisper.InitializeAsync();
+                }
 
-                    if (selectedInfo == null)
+                _waveIn = new WaveInEvent
+                {
+                    DeviceNumber       = Math.Max(_selectedDeviceIndex, 0),
+                    WaveFormat         = CaptureFormat,
+                    BufferMilliseconds = 100,
+                };
+
+                _waveIn.DataAvailable += (_, e) =>
+                {
+                    lock (_lock) _buffer.Write(e.Buffer, 0, e.BytesRecorded);
+
+                    // Peak level of this callback's samples — drives the mic level bar
+                    // and the silence gate for the next chunk.
+                    float peak = 0;
+                    for (int i = 0; i + 1 < e.BytesRecorded; i += 2)
                     {
-                        StatusChanged?.Invoke(this, "Error: No Speech Recognizer found.");
-                        return;
+                        float sample = Math.Abs(BitConverter.ToInt16(e.Buffer, i) / 32768f);
+                        if (sample > peak) peak = sample;
                     }
+                    if (peak > _chunkPeak) _chunkPeak = peak;
+                    AudioLevelChanged?.Invoke(this, peak * 100);
+                };
 
-                    _recognizer = new SpeechRecognitionEngine(selectedInfo.Id);
-                    StatusChanged?.Invoke(this, $"Engine: {selectedInfo.Culture.Name}");
-                    
-                    _recognizer.LoadGrammar(new DictationGrammar());
-                    
-                    // Hook events for debugging
-                    _recognizer.SpeechRecognized += (s, e) =>
-                    {
-                        // 0.8 rejected almost everything from System.Speech dictation
-                        // (typical scores are 0.5-0.7) — the mic looked dead.
-                        if (e.Result.Confidence > 0.5)
-                        {
-                            TextCaptured?.Invoke(this, e.Result.Text);
-                        }
-                    };
-                    
-                    _recognizer.SpeechHypothesized += (s, e) =>
-                    {
-                         // Optional: Only log if needed, spammy
-                    };
-                    
-                    _recognizer.SpeechRecognitionRejected += (s, e) =>
-                    {
-                         StatusChanged?.Invoke(this, "Speech Rejected (Noise?)");
-                    };
-                }
-
-                if (_selectedDeviceIndex >= 0)
-                {
-                    // For now, let's try to trust the engine's default device handling to rule out stream issues.
-                    // If this works, we know the issue was the custom SpeechStreamer pipe.
-                    _recognizer.SetInputToDefaultAudioDevice();
-                    StatusChanged?.Invoke(this, "Mic Active (Default System Device)");
-                }
-                else
-                {
-                    _recognizer.SetInputToDefaultAudioDevice();
-                    StatusChanged?.Invoke(this, "Mic Active (Default)");
-                }
-
-                _recognizer.RecognizeAsync(RecognizeMode.Multiple);
-                _isListening = true;
-
-                /* NAUDIO DISABLED TEMPORARILY TO AVOID CONFLICTS
-                _waveIn = new WaveInEvent();
-                // ... logic removed ...
                 _waveIn.StartRecording();
-                */
+                _transcribeTimer = new Timer(TranscribeChunk, null, ChunkIntervalMs, ChunkIntervalMs);
+                _isRunning = true;
+                StatusChanged?.Invoke(this, "Escuchando (Whisper)...");
             }
             catch (Exception ex)
             {
@@ -132,72 +123,90 @@ namespace WindowsLiveCaptionsReader.Services
             }
         }
 
-        public void Stop()
+        private async void TranscribeChunk(object? _)
         {
+            if (_isTranscribing)
+            {
+                // Whisper fell behind — keep only the most recent audio
+                lock (_lock)
+                {
+                    long maxBytes = (long)CaptureFormat.AverageBytesPerSecond * MaxBufferSeconds;
+                    if (_buffer.Length > maxBytes)
+                    {
+                        byte[] all = _buffer.ToArray();
+                        _buffer = new MemoryStream();
+                        _buffer.Write(all, (int)(all.Length - maxBytes), (int)maxBytes);
+                    }
+                }
+                return;
+            }
+            _isTranscribing = true;
+
             try
             {
-                if (_recognizer != null) _recognizer.RecognizeAsyncStop();
-                // if (_waveIn != null) _waveIn.StopRecording();
-                _isListening = false;
-                StatusChanged?.Invoke(this, "Mic Stopped");
-                AudioLevelChanged?.Invoke(this, 0);
+                byte[] raw;
+                float peak;
+
+                lock (_lock)
+                {
+                    // Require at least 1 second of audio
+                    if (_buffer.Length < CaptureFormat.AverageBytesPerSecond)
+                    {
+                        _isTranscribing = false;
+                        return;
+                    }
+                    raw = _buffer.ToArray();
+                    _buffer = new MemoryStream();
+                    peak = _chunkPeak;
+                    _chunkPeak = 0;
+                }
+
+                if (peak < SilencePeakThreshold) return; // silence — don't feed Whisper
+
+                using (var writer = new WaveFileWriter(_tempFile, CaptureFormat))
+                    writer.Write(raw, 0, raw.Length);
+
+                string text = (await _whisper.TranscribeAsync(_tempFile)).Trim();
+
+                if (text.Length > 0 && !IsWhisperNoise(text))
+                    TextCaptured?.Invoke(this, text);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke(this, $"Error Whisper: {ex.Message[..Math.Min(60, ex.Message.Length)]}");
+            }
+            finally
+            {
+                _isTranscribing = false;
+            }
+        }
+
+        // Whisper emits bracketed tags and stock hallucinations on near-silent audio
+        private static bool IsWhisperNoise(string text)
+        {
+            string t = text.Trim();
+            return (t.StartsWith('[') && t.EndsWith(']'))
+                || (t.StartsWith('(') && t.EndsWith(')'))
+                || (t.StartsWith('*') && t.EndsWith('*'));
+        }
+
+        public void Stop()
+        {
+            _isRunning = false;
+            _transcribeTimer?.Dispose();
+            _transcribeTimer = null;
+            try { _waveIn?.StopRecording(); } catch { }
+            _waveIn?.Dispose();
+            _waveIn = null;
+            lock (_lock) _buffer = new MemoryStream();
+            StatusChanged?.Invoke(this, "Mic Stopped");
+            AudioLevelChanged?.Invoke(this, 0);
         }
 
         public void Dispose()
         {
             Stop();
-            _recognizer?.Dispose();
+            _buffer.Dispose();
         }
-    }
-    
-    // Custom Stream Pipe
-    public class SpeechStreamer : System.IO.Stream
-    {
-        private System.Collections.Concurrent.ConcurrentQueue<byte> _buffer;
-        private AutoResetEvent _dataAvailable;
-        private long _written;
-
-        public SpeechStreamer(int bufferSize)
-        {
-            _buffer = new System.Collections.Concurrent.ConcurrentQueue<byte>();
-            _dataAvailable = new AutoResetEvent(false);
-        }
-
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            for (int i = 0; i < count; i++) _buffer.Enqueue(buffer[offset + i]);
-            _dataAvailable.Set();
-            _written += count;
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            int read = 0;
-            while (read < count)
-            {
-                if (_buffer.TryDequeue(out byte b))
-                {
-                    buffer[offset + read] = b;
-                    read++;
-                }
-                else
-                {
-                    if (read > 0) return read;
-                    _dataAvailable.WaitOne(100); // Wait for audio
-                }
-            }
-            return read;
-        }
-
-        public override bool CanRead => true;
-        public override bool CanSeek => false;
-        public override bool CanWrite => true;
-        public override long Length => _written;
-        public override long Position { get => _written; set => throw new NotImplementedException(); }
-        public override void Flush() { }
-        public override long Seek(long offset, System.IO.SeekOrigin origin) => throw new NotImplementedException();
-        public override void SetLength(long value) => throw new NotImplementedException();
     }
 }
