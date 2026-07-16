@@ -1,0 +1,5 @@
+;!@Install@!UTF-8!
+Title="English Learning Assistant - Instalador"
+BeginPrompt="¿Deseas instalar English Learning Assistant?\n\nEsto instalará:\n- Aplicación principal\n- Ollama (Motor de IA)\n- Accesos directos"
+RunProgram="INSTALAR.bat"
+;!@InstallEnd@!

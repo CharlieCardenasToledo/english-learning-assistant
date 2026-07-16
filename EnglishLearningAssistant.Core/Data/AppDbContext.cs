@@ -11,19 +11,19 @@ namespace WindowsLiveCaptionsReader.Data
         public DbSet<TranscriptionEntry> Entries { get; set; }
         public DbSet<DetectedQuestion> Questions { get; set; }
         public DbSet<VocabularyItem> Vocabulary { get; set; }
+        public DbSet<TranslationCacheEntry> TranslationCache { get; set; }
+
 
         protected override void OnConfiguring(DbContextOptionsBuilder options)
         {
-            var folder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "WindowsLiveCaptionsReader");
+            var dbPath = EnglishLearningAssistant.Core.Models.AppConfiguration.Instance.Storage.DatabasePath!;
+            var folder = Path.GetDirectoryName(dbPath);
             
-            if (!Directory.Exists(folder))
+            if (!string.IsNullOrEmpty(folder) && !Directory.Exists(folder))
             {
                 Directory.CreateDirectory(folder);
             }
 
-            var dbPath = Path.Combine(folder, "sessions.db");
             options.UseSqlite($"Data Source={dbPath}");
         }
 
@@ -42,13 +42,11 @@ namespace WindowsLiveCaptionsReader.Data
             
             // VocabularyItem configuration
             modelBuilder.Entity<VocabularyItem>()
-                .Ignore(v => v.SessionIds); // Handled via conversion below
-                
-            modelBuilder.Entity<VocabularyItem>()
                 .Property(v => v.SessionIds)
                 .HasConversion(
                     v => string.Join(";", v),
                     v => new List<int>(Array.ConvertAll(v.Split(';', StringSplitOptions.RemoveEmptyEntries), int.Parse)));
+
 
         }
     }

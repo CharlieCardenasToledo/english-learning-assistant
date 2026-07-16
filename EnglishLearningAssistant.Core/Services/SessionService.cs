@@ -6,8 +6,11 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Timers;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using WindowsLiveCaptionsReader.Data;
 using WindowsLiveCaptionsReader.Models;
+
 
 namespace WindowsLiveCaptionsReader.Services
 {
@@ -24,8 +27,52 @@ namespace WindowsLiveCaptionsReader.Services
 
         public async Task InitializeAsync()
         {
+            // Si el archivo de base de datos existe pero está vacío (0 bytes), lo eliminamos para recrearlo
+            try
+            {
+                var dbPath = EnglishLearningAssistant.Core.Models.AppConfiguration.Instance.Storage.DatabasePath!;
+                if (System.IO.File.Exists(dbPath) && new System.IO.FileInfo(dbPath).Length == 0)
+                {
+                    System.IO.File.Delete(dbPath);
+                }
+            }
+            catch { }
+
             await _context.Database.EnsureCreatedAsync();
+
+            // Garantizar que todas las tablas existan (útil si el archivo de base de datos existía pero estaba vacío o corrupto)
+            try
+            {
+                var databaseCreator = _context.Database.GetService<IRelationalDatabaseCreator>();
+                if (!await databaseCreator.HasTablesAsync())
+                {
+                    await databaseCreator.CreateTablesAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                EnglishLearningAssistant.Core.AppLogger.Error("No se pudo verificar o crear las tablas de la base de datos", ex);
+            }
+
+            // Asegurar que la tabla de caché de traducciones existe (Fase 6)
+            try
+            {
+                await _context.Database.ExecuteSqlRawAsync(
+                    "CREATE TABLE IF NOT EXISTS TranslationCache (" +
+                    "Id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "OriginalText TEXT, " +
+                    "TranslatedText TEXT, " +
+                    "SourceLanguage TEXT, " +
+                    "TargetLanguage TEXT, " +
+                    "ProviderName TEXT, " +
+                    "CreatedAt TEXT)");
+            }
+            catch (Exception ex)
+            {
+                EnglishLearningAssistant.Core.AppLogger.Error("No se pudo verificar/crear la tabla TranslationCache", ex);
+            }
         }
+
 
         public async Task<Session> CreateSessionAsync(string title)
         {
@@ -169,6 +216,63 @@ namespace WindowsLiveCaptionsReader.Services
             return JsonSerializer.Serialize(session, new JsonSerializerOptions { WriteIndented = true });
         }
 
+        public async Task<string> ExportToSrtAsync(int sessionId)
+        {
+            var session = await LoadSessionAsync(sessionId);
+            if (session == null) return string.Empty;
+
+            var sb = new StringBuilder();
+            int counter = 1;
+
+            foreach (var entry in session.Entries.OrderBy(e => e.Timestamp))
+            {
+                var start = TimeSpan.FromSeconds(entry.AudioStartTime ?? 0);
+                var end = TimeSpan.FromSeconds(entry.AudioEndTime ?? (entry.AudioStartTime ?? 0) + 3);
+
+                sb.AppendLine(counter.ToString());
+                sb.AppendLine($"{start:hh\\:mm\\:ss\\,fff} --> {end:hh\\:mm\\:ss\\,fff}");
+                sb.AppendLine(entry.OriginalText);
+                if (!string.IsNullOrEmpty(entry.TranslatedText))
+                {
+                    sb.AppendLine(entry.TranslatedText);
+                }
+                sb.AppendLine();
+                counter++;
+            }
+
+            return sb.ToString();
+        }
+
+        public async Task<string> ExportToVttAsync(int sessionId)
+        {
+            var session = await LoadSessionAsync(sessionId);
+            if (session == null) return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("WEBVTT");
+            sb.AppendLine();
+
+            int counter = 1;
+            foreach (var entry in session.Entries.OrderBy(e => e.Timestamp))
+            {
+                var start = TimeSpan.FromSeconds(entry.AudioStartTime ?? 0);
+                var end = TimeSpan.FromSeconds(entry.AudioEndTime ?? (entry.AudioStartTime ?? 0) + 3);
+
+                sb.AppendLine(counter.ToString());
+                sb.AppendLine($"{start:hh\\:mm\\:ss\\.fff} --> {end:hh\\:mm\\:ss\\.fff}");
+                sb.AppendLine(entry.OriginalText);
+                if (!string.IsNullOrEmpty(entry.TranslatedText))
+                {
+                    sb.AppendLine(entry.TranslatedText);
+                }
+                sb.AppendLine();
+                counter++;
+            }
+
+            return sb.ToString();
+        }
+
+
         public void StartAutoSave(Session session)
         {
             StopAutoSave();
@@ -178,19 +282,29 @@ namespace WindowsLiveCaptionsReader.Services
             {
                 if (_currentSession != null)
                 {
-                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(async () => 
+                    var syncContext = System.Threading.SynchronizationContext.Current;
+                    if (syncContext != null)
+                    {
+                        syncContext.Post(async _ => 
+                        {
+                            try
+                            {
+                                await SaveSessionAsync(_currentSession);
+                            }
+                            catch { }
+                        }, null);
+                    }
+                    else
                     {
                         try
                         {
                             await SaveSessionAsync(_currentSession);
                         }
-                        catch
-                        {
-                            // Handle auto-save errors silently or log them
-                        }
-                    });
+                        catch { }
+                    }
                 }
             };
+
             _autoSaveTimer.Start();
         }
 

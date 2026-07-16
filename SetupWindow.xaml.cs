@@ -246,7 +246,8 @@ namespace WindowsLiveCaptionsReader
         {
             SaveSettings();
 
-            var main = new MainWindow();
+            var main = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+                .GetRequiredService<MainWindow>(App.ServiceProvider);
             main.Show();
             Close();
         }

@@ -1,819 +1,825 @@
 <Window x:Class="WindowsLiveCaptionsReader.MainWindow"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-    mc:Ignorable="d"
-    Title="Live Captions Reader"
-    WindowStyle="None"
-    AllowsTransparency="True"
-    Background="Transparent"
-    Topmost="True"
-    ResizeMode="NoResize"
-    WindowStartupLocation="Manual"
-    MouseDown="Window_MouseDown"
-    KeyDown="Window_KeyDown">
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        mc:Ignorable="d"
+        Title="English Learning Assistant"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        MouseDown="Window_MouseDown"
+        KeyDown="Window_KeyDown">
 
-    <Window.Resources>
-        <Style x:Key="IconBtn" TargetType="Button">
-            <Setter Property="Background"      Value="Transparent"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Foreground"      Value="#55FFFFFF"/>
-            <Setter Property="Cursor"          Value="Hand"/>
-            <Setter Property="Padding"         Value="6,4"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="b" Background="{TemplateBinding Background}"
-                                CornerRadius="4" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="b" Property="Background" Value="#18FFFFFF"/>
-                                <Setter Property="Foreground" Value="#CCFFFFFF"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="PillBtn" TargetType="Border">
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Opacity" Value="0.80"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- Panel header label style -->
-        <Style x:Key="PanelLabel" TargetType="TextBlock">
-            <Setter Property="FontSize"   Value="11"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="#AAAAAA"/>
-        </Style>
-    </Window.Resources>
-
-    <Border x:Name="MainBorder" CornerRadius="0" Background="#72000000"
-            BorderBrush="#14FFFFFF" BorderThickness="0">
+    <Border x:Name="MainBorder" CornerRadius="10" Background="#F50F0F1A"
+            BorderBrush="#25FFFFFF" BorderThickness="1">
         <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>  <!-- Row 0: Header -->
-                <RowDefinition Height="*"/>     <!-- Row 1: 4 quadrants -->
-                <RowDefinition Height="Auto"/>  <!-- Row 2: Action bar -->
-            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="200"/> <!-- Sidebar -->
+                <ColumnDefinition Width="*"/>   <!-- Main content panel -->
+            </Grid.ColumnDefinitions>
 
-            <!-- ════════════════════════════════════════════════════
-                 ROW 0 — Header bar
-                 ════════════════════════════════════════════════════ -->
-            <Border Grid.Row="0" Background="#18FFFFFF"
-                    BorderBrush="#18FFFFFF" BorderThickness="0,0,0,1">
-                <Grid Margin="14,5,14,6">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
+            <!-- ===================================================
+                 SIDEBAR NAVIGATION COLUMN (T5.2)
+                 =================================================== -->
+            <Border Grid.Column="0" Background="#F007070F" 
+                    BorderBrush="#1CFFFFFF" BorderThickness="0,0,1,0" CornerRadius="10,0,0,10">
+                <Grid Margin="12,24,12,24">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/> <!-- Brand -->
+                        <RowDefinition Height="*"/>    <!-- Navigation buttons -->
+                        <RowDefinition Height="Auto"/> <!-- Status & Footer -->
+                    </Grid.RowDefinitions>
 
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border x:Name="ModeIndicatorBadge" Background="#4CAF50"
-                                CornerRadius="10" Padding="8,3" Margin="0,0,8,0">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock x:Name="ModeIcon" Text="⚡" FontSize="10"
-                                           Foreground="White" Margin="0,0,3,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="ModeText" Text="LIVE" FontSize="10"
-                                           FontWeight="Bold" Foreground="White"/>
-                            </StackPanel>
-                        </Border>
-                        <TextBlock x:Name="StatusText" Text="Iniciando..."
-                                   Foreground="#999" FontSize="11" VerticalAlignment="Center"/>
-                        <Border x:Name="LmStudioStatusBadge" Background="#22444444"
-                                CornerRadius="6" Padding="6,2" Margin="8,0,0,0"
-                                VerticalAlignment="Center">
-                            <TextBlock x:Name="LmStudioStatusText" Text="● LM Studio"
-                                       Foreground="#AAA" FontSize="10"/>
-                        </Border>
+                    <!-- Brand / Title -->
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="6,0,0,32">
+                        <TextBlock Text="🎧" FontSize="26" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Learning Assistant" Foreground="White" FontSize="13" FontWeight="Bold"/>
+                            <TextBlock Text="Local Platform" Foreground="#44FFFFFF" FontSize="10"/>
+                        </StackPanel>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Button x:Name="BtnSessions" Click="Sessions_Click"
-                                Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                ToolTip="Sesiones guardadas">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:SymbolIcon Symbol="History24" Foreground="#555"
-                                               Margin="0,0,4,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="CurrentSessionTitle" Text="Nueva Sesión"
-                                           FontSize="10" Foreground="#666"/>
-                            </StackPanel>
-                        </Button>
-                        <Button x:Name="BtnRenameSession" Click="RenameSession_Click"
-                                Style="{StaticResource IconBtn}" ToolTip="Renombrar sesión" Padding="4,2">
-                            <ui:SymbolIcon Symbol="Edit24" Foreground="#666"/>
-                        </Button>
-                        <Border x:Name="SessionRenamePanel" Visibility="Collapsed"
-                                Background="#1AFFFFFF" CornerRadius="4" Padding="6,2">
-                            <TextBox x:Name="SessionTitleBox" Background="Transparent"
-                                     Foreground="White" BorderThickness="0" FontSize="10"
-                                     MinWidth="120"
-                                     KeyDown="SessionTitleBox_KeyDown"
-                                     LostFocus="SessionTitleBox_LostFocus"/>
-                        </Border>
+                    <!-- Navigation Items (T5.2) -->
+                    <StackPanel Grid.Row="1">
+                        <Button x:Name="BtnNavLive" Click="Nav_Click" Content="⚡" Tag="En Vivo" Style="{StaticResource SidebarBtnActive}"/>
+                        <Button x:Name="BtnNavHistory" Click="Nav_Click" Content="📂" Tag="Sesiones" Style="{StaticResource SidebarBtn}"/>
+                        <Button x:Name="BtnNavVocab" Click="Nav_Click" Content="📚" Tag="Vocabulario" Style="{StaticResource SidebarBtn}"/>
+                        <Button x:Name="BtnNavSettings" Click="Nav_Click" Content="⚙️" Tag="Configuración" Style="{StaticResource SidebarBtn}"/>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border x:Name="PrimaryButtonBorder" Background="#4CAF50"
-                                CornerRadius="10" Cursor="Hand" Margin="0,0,10,0"
-                                MouseLeftButtonDown="PrimaryAction_Click"
-                                Style="{StaticResource PillBtn}" ToolTip="Pausar / Reanudar">
-                            <StackPanel Orientation="Horizontal" Margin="8,3">
-                                <TextBlock x:Name="PrimaryButtonIcon" Text="⏸️" FontSize="11"
-                                           Foreground="White" Margin="0,0,3,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="PrimaryButtonText" Text="Pausar" FontSize="10"
-                                           FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Border>
-
-                        <Border Width="1" Background="#18FFFFFF" Margin="0,2,8,2"/>
-
-                        <Button Click="Vocabulary_Click" Style="{StaticResource IconBtn}"
-                                ToolTip="Vocabulario" Padding="5,3">
-                            <ui:SymbolIcon Symbol="BookOpen24"/>
-                        </Button>
-                        <Button x:Name="BtnQuickAssistHeader" Click="Copilot_Click"
-                                Style="{StaticResource IconBtn}" ToolTip="Asistente (Ctrl+Space)" Padding="5,3">
-                            <ui:SymbolIcon Symbol="Lightbulb24"/>
-                        </Button>
-                        <Button x:Name="BtnMicToggle" Click="MicToggle_Click"
-                                Style="{StaticResource IconBtn}" ToolTip="Activar/desactivar micrófono" Padding="5,3">
-                            <ui:SymbolIcon Symbol="Mic24"/>
-                        </Button>
-                        <Button x:Name="BtnSettings" Click="Settings_Click"
-                                Style="{StaticResource IconBtn}" ToolTip="Configuración" Padding="5,3">
-                            <ui:SymbolIcon Symbol="Settings24"/>
-                        </Button>
-
-                        <Border Width="1" Background="#18FFFFFF" Margin="6,2,6,2"/>
-
-                        <Button x:Name="BtnMinimize" Click="Minimize_Click"
-                                Style="{StaticResource IconBtn}" ToolTip="Minimizar" Padding="5,3">
-                            <ui:SymbolIcon Symbol="ChevronDown24"/>
-                        </Button>
-                        <Button Click="CloseApp_Click" Style="{StaticResource IconBtn}"
-                                ToolTip="Cerrar" Padding="5,3">
-                            <ui:SymbolIcon Symbol="Dismiss24"/>
-                        </Button>
+                    <!-- Footer Info (Cefr Level & Connection status) -->
+                    <StackPanel Grid.Row="2" Margin="6,0,0,0">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Ellipse Width="8" Height="8" Fill="LightGreen" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="Whisper Online" Foreground="#AAFFFFFF" FontSize="10" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock x:Name="SidebarCefrText" Text="Nivel: B1" Foreground="#44FFFFFF" FontSize="10" Margin="0,0,0,4"/>
+                        <TextBlock Text="v1.2.0-stable" Foreground="#33FFFFFF" FontSize="9"/>
                     </StackPanel>
                 </Grid>
             </Border>
 
-            <!-- ════════════════════════════════════════════════════
-                 ROW 1 — 4 quadrants (2×2 grid)
-                 ════════════════════════════════════════════════════ -->
-            <Grid Grid.Row="1">
+            <!-- ===================================================
+                 MAIN DISPLAY COLUMN
+                 =================================================== -->
+            <Grid Grid.Column="1">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>  <!-- Top row -->
-                    <RowDefinition Height="1"/>  <!-- Horizontal divider -->
-                    <RowDefinition Height="*"/>  <!-- Bottom row -->
+                    <RowDefinition Height="Auto"/> <!-- Title / Window bar -->
+                    <RowDefinition Height="*"/>    <!-- Swappable panel content -->
                 </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>  <!-- Left column -->
-                    <ColumnDefinition Width="1"/>  <!-- Vertical divider -->
-                    <ColumnDefinition Width="*"/>  <!-- Right column -->
-                </Grid.ColumnDefinitions>
 
-                <!-- Horizontal divider -->
-                <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
-                        Background="#28FFFFFF"/>
-
-                <!-- Vertical divider -->
-                <Border Grid.Row="0" Grid.Column="1" Grid.RowSpan="3"
-                        Background="#28FFFFFF"/>
-
-                <!-- ┌─────────────────────────────────┐
-                     │  Q1 — EN Transcripción (top-left) │
-                     └─────────────────────────────────┘ -->
-                <Border Grid.Row="0" Grid.Column="0" Background="#0EFFFFFF">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-                        <DockPanel Grid.Row="0" Margin="16,7,16,4" LastChildFill="False">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="EN" Foreground="#4CAF50" FontSize="10"
-                                           FontWeight="Bold" Margin="0,0,6,0"/>
-                                <TextBlock Text="TRANSCRIPCIÓN EN VIVO" Style="{StaticResource PanelLabel}"/>
-                            </StackPanel>
-                        </DockPanel>
-                        <ScrollViewer Grid.Row="1" x:Name="TranscriptionScrollViewer"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <TextBlock x:Name="TranscriptionText"
-                                       Text="Esperando audio..."
-                                       Foreground="White" FontSize="16"
-                                       FontFamily="Segoe UI" TextWrapping="Wrap"
-                                       Margin="16,2,16,12" LineHeight="24">
-                                <TextBlock.Effect>
-                                    <DropShadowEffect ShadowDepth="0" BlurRadius="6"
-                                                      Color="Black" Opacity="0.3"/>
-                                </TextBlock.Effect>
-                            </TextBlock>
-                        </ScrollViewer>
-                    </Grid>
-                </Border>
-
-                <!-- ┌─────────────────────────────────┐
-                     │  Q2 — ES Traducción (top-right)  │
-                     └─────────────────────────────────┘ -->
-                <Border Grid.Row="0" Grid.Column="2" Background="#0A001020">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-                        <DockPanel Grid.Row="0" Margin="16,7,16,4" LastChildFill="False">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="ES" Foreground="#4B9CF6" FontSize="10"
-                                           FontWeight="Bold" Margin="0,0,6,0"/>
-                                <TextBlock Text="TRADUCCIÓN" Style="{StaticResource PanelLabel}"/>
-                            </StackPanel>
-                            <TextBlock x:Name="TranslationStatus" DockPanel.Dock="Right"
-                                       Text="" Foreground="#999" FontSize="11"
-                                       VerticalAlignment="Center"/>
-                        </DockPanel>
-                        <ScrollViewer Grid.Row="1" x:Name="TranslationScrollViewer"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <TextBlock x:Name="TranslationText"
-                                       Text="La traducción aparecerá automáticamente..."
-                                       Foreground="#DDFFFFFF" FontSize="16"
-                                       FontFamily="Segoe UI" TextWrapping="Wrap"
-                                       FontStyle="Italic" Margin="16,2,16,12" LineHeight="24">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Opacity" Value="1"/>
-                                        <Style.Triggers>
-                                            <Trigger Property="Text" Value="La traducción aparecerá automáticamente...">
-                                                <Setter Property="Opacity" Value="0.25"/>
-                                            </Trigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </ScrollViewer>
-                    </Grid>
-                </Border>
-
-                <!-- ┌─────────────────────────────────────────┐
-                     │  Q3 — Pregunta detectada (bottom-left)  │
-                     └─────────────────────────────────────────┘ -->
-                <Border Grid.Row="2" Grid.Column="0" Background="#0A180000">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>  <!-- panel header -->
-                            <RowDefinition Height="*"/>     <!-- question text -->
-                            <RowDefinition Height="Auto"/>  <!-- context sub-header -->
-                            <RowDefinition Height="1"/>     <!-- inner divider -->
-                            <RowDefinition Height="*"/>     <!-- context text -->
-                            <RowDefinition Height="1"/>     <!-- divider before chat -->
-                            <RowDefinition Height="Auto"/>  <!-- chat input -->
-                        </Grid.RowDefinitions>
-
-                        <DockPanel Grid.Row="0" Margin="16,7,16,4" LastChildFill="False">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <ui:SymbolIcon Symbol="QuestionCircle24" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="PREGUNTA DETECTADA" Style="{StaticResource PanelLabel}"/>
-                            </StackPanel>
-                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                <Button Click="CopyQuestion_Click" Style="{StaticResource IconBtn}"
-                                        Padding="6,4" ToolTip="Copiar pregunta" Margin="0,0,4,0">
-                                    <ui:SymbolIcon Symbol="Copy24"/>
-                                </Button>
-                                <Border x:Name="QuestionBadgeBorder"
-                                        Background="#CC1E3A5F" CornerRadius="8" Padding="6,2"
-                                        Visibility="Collapsed">
-                                    <TextBlock x:Name="QuestionBadge" Text="❓ Pregunta"
-                                               Foreground="#7EC8E3" FontSize="10" FontWeight="SemiBold"/>
-                                </Border>
-                            </StackPanel>
-                        </DockPanel>
-
-                        <ScrollViewer Grid.Row="1" x:Name="QuestionScrollViewer"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <TextBlock x:Name="QuestionText"
-                                       Text="Esperando pregunta del profesor..."
-                                       Foreground="White" FontSize="15"
-                                       FontFamily="Segoe UI" TextWrapping="Wrap"
-                                       Margin="16,4,16,8" LineHeight="22"/>
-                        </ScrollViewer>
-
-                        <DockPanel Grid.Row="2" Margin="16,4,16,2" LastChildFill="False">
-                            <TextBlock Text="CONTEXTO" Foreground="#999"
-                                       FontSize="11" FontWeight="SemiBold"/>
-                        </DockPanel>
-
-                        <Border Grid.Row="3" Background="#28FFFFFF"/>
-
-                        <ScrollViewer Grid.Row="4" x:Name="QuestionContextScrollViewer"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel x:Name="QuestionContextStack" Margin="16,4,16,8">
-                                <TextBlock x:Name="QuestionContextPlaceholder"
-                                           Text="El contexto de la pregunta aparecerá aquí..."
-                                           Foreground="#BBCCE8FF" FontSize="12"
-                                           FontFamily="Segoe UI" TextWrapping="Wrap"
-                                           FontStyle="Italic" LineHeight="18" Opacity="0.5"/>
-                            </StackPanel>
-                        </ScrollViewer>
-
-                        <!-- Divider before chat -->
-                        <Border Grid.Row="5" Background="#28FFFFFF"/>
-
-                        <!-- Chat manual: fallback para cuando el detector falla -->
-                        <Border Grid.Row="6" Background="#0AFFFFFF"
-                                Margin="8,5,8,6" CornerRadius="6"
-                                BorderBrush="#1AFFFFFF" BorderThickness="1">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <Grid Grid.Column="0">
-                                    <TextBox x:Name="ManualQuestionBox"
-                                             Background="Transparent" Foreground="White"
-                                             BorderThickness="0" Padding="10,7"
-                                             FontSize="12" FontFamily="Segoe UI"
-                                             CaretBrush="White"
-                                             KeyDown="ManualQuestion_KeyDown"
-                                             TextChanged="ManualQuestionBox_TextChanged"
-                                             VerticalContentAlignment="Center"/>
-                                    <TextBlock x:Name="ManualQuestionHint"
-                                               Text="Pregunta manual... (Enter para enviar)"
-                                               Foreground="#66FFFFFF" FontSize="11" FontStyle="Italic"
-                                               IsHitTestVisible="False" Margin="11,0,0,0"
-                                               VerticalAlignment="Center"/>
-                                </Grid>
-                                <Button Grid.Column="1" Click="ManualQuestion_Submit"
-                                        Style="{StaticResource IconBtn}" Padding="10,6"
-                                        ToolTip="Enviar pregunta (Enter)">
-                                    <ui:SymbolIcon Symbol="Send24" Foreground="#FFD700"/>
-                                </Button>
-                            </Grid>
-                        </Border>
-                    </Grid>
-                </Border>
-
-                <!-- ┌─────────────────────────────────────────────┐
-                     │  Q4 — Sugerencia de respuesta (bottom-right) │
-                     └─────────────────────────────────────────────┘ -->
-                <Border Grid.Row="2" Grid.Column="2" Background="#0A000A1A">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>  <!-- panel header -->
-                            <RowDefinition Height="2"/>     <!-- loading bar -->
-                            <RowDefinition Height="Auto"/>  <!-- EN sub-header -->
-                            <RowDefinition Height="*"/>     <!-- EN options -->
-                            <RowDefinition Height="1"/>     <!-- inner divider -->
-                            <RowDefinition Height="Auto"/>  <!-- ES sub-header -->
-                            <RowDefinition Height="*"/>     <!-- ES options -->
-                        </Grid.RowDefinitions>
-
-                        <!-- Panel header -->
-                        <DockPanel Grid.Row="0" Margin="16,7,16,4" LastChildFill="False">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <ui:SymbolIcon Symbol="Lightbulb24" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="OPCIONES DE RESPUESTA" Style="{StaticResource PanelLabel}"/>
-                            </StackPanel>
-                            <TextBlock x:Name="ResponseStatus" DockPanel.Dock="Right"
-                                       Text="" Foreground="#999" FontSize="11"
-                                       VerticalAlignment="Center"/>
-                        </DockPanel>
-
-                        <!-- Loading indicator -->
-                        <ProgressBar x:Name="ResponseLoadingBar" Grid.Row="1"
-                                     IsIndeterminate="True" Background="Transparent"
-                                     Foreground="#88FFD700" BorderThickness="0"
-                                     Visibility="Collapsed"/>
-
-                        <!-- EN sub-header -->
-                        <DockPanel Grid.Row="2" Margin="16,4,16,2" LastChildFill="False">
-                            <TextBlock Text="EN" Foreground="#999"
-                                       FontSize="11" FontWeight="SemiBold"/>
-                            <Button DockPanel.Dock="Right" Click="CopyEnOptions_Click"
-                                    Style="{StaticResource IconBtn}" Padding="5,3"
-                                    ToolTip="Copiar opciones en inglés">
-                                <ui:SymbolIcon Symbol="Copy24"/>
-                            </Button>
-                        </DockPanel>
-
-                        <!-- EN options -->
-                        <ScrollViewer Grid.Row="3" x:Name="ResponseScrollViewer"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel x:Name="ResponseEnStack" Margin="16,2,16,6">
-                                <TextBlock x:Name="ResponseEnPlaceholder"
-                                           Text="Las opciones aparecerán al detectar una pregunta..."
-                                           Foreground="#FFD700" FontSize="13"
-                                           FontFamily="Segoe UI" TextWrapping="Wrap"
-                                           LineHeight="20" Opacity="0.5"/>
-                            </StackPanel>
-                        </ScrollViewer>
-
-                        <!-- Inner divider -->
-                        <Border Grid.Row="4" Background="#28FFFFFF"/>
-
-                        <!-- ES sub-header -->
-                        <DockPanel Grid.Row="5" Margin="16,4,16,2" LastChildFill="False">
-                            <TextBlock Text="ES" Foreground="#999"
-                                       FontSize="11" FontWeight="SemiBold"/>
-                            <Button DockPanel.Dock="Right" Click="CopyEsOptions_Click"
-                                    Style="{StaticResource IconBtn}" Padding="5,3"
-                                    ToolTip="Copiar opciones en español">
-                                <ui:SymbolIcon Symbol="Copy24"/>
-                            </Button>
-                        </DockPanel>
-
-                        <!-- ES options -->
-                        <ScrollViewer Grid.Row="6" x:Name="ResponseEsScrollViewer"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel x:Name="ResponseEsStack" Margin="16,2,16,6">
-                                <TextBlock x:Name="ResponseEsPlaceholder"
-                                           Text="Las opciones en español aparecerán aquí..."
-                                           Foreground="White" FontSize="13"
-                                           FontFamily="Segoe UI" TextWrapping="Wrap"
-                                           LineHeight="20" Opacity="0.5"/>
-                            </StackPanel>
-                        </ScrollViewer>
-                    </Grid>
-                </Border>
-            </Grid>
-
-            <!-- ════════════════════════════════════════════════════
-                 ROW 2 — Action bar
-                 ════════════════════════════════════════════════════ -->
-            <Border Grid.Row="2" Background="#18FFFFFF"
-                    BorderBrush="#28FFFFFF" BorderThickness="0,1,0,0" Padding="14,6">
-                <Grid>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left"
-                                VerticalAlignment="Center">
-                        <Border x:Name="TranslateButtonBorder" Background="#1A2B7CE6"
-                                CornerRadius="10" Cursor="Hand" Margin="0,0,8,0"
-                                MouseLeftButtonDown="Translate_Click"
-                                Style="{StaticResource PillBtn}"
-                                ToolTip="Traducir la transcripción (Ctrl+T)">
-                            <StackPanel Orientation="Horizontal" Margin="12,5">
-                                <ui:SymbolIcon Symbol="Globe24" Foreground="#7EC3FF"
-                                               Margin="0,0,5,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="Traducir" FontSize="11" FontWeight="SemiBold"
-                                           Foreground="#7EC3FF" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Border>
-                        <Button Click="ClearHistory_Click" Style="{StaticResource IconBtn}"
-                                ToolTip="Limpiar todos los paneles (Ctrl+Shift+C)" Padding="7,4">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:SymbolIcon Symbol="Delete24" Margin="0,0,4,0"/>
-                                <TextBlock Text="Limpiar" FontSize="11" Foreground="#AAAAAA"/>
-                            </StackPanel>
-                        </Button>
-                        <Button Click="GenerateSummary_Click" Style="{StaticResource IconBtn}"
-                                ToolTip="Generar resumen de la clase" Padding="7,4">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:SymbolIcon Symbol="DocumentText24" Margin="0,0,4,0"/>
-                                <TextBlock Text="Resumen" FontSize="11" Foreground="#AAAAAA"/>
-                            </StackPanel>
-                        </Button>
-                    </StackPanel>
-                </Grid>
-            </Border>
-
-            <!-- ════════════════════════════════════════════════════
-                 OVERLAYS
-                 ════════════════════════════════════════════════════ -->
-
-            <!-- Assistant overlay (Ctrl+Space) — spans content row -->
-            <Border x:Name="SuggestionsOverlay" Grid.Row="1"
-                    Background="#F01e293b" CornerRadius="8"
-                    Margin="15" Visibility="Collapsed" Padding="20" Panel.ZIndex="50">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <Grid Grid.Row="0" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal">
-                            <ui:SymbolIcon Symbol="Sparkle24" Foreground="#FFD700"
-                                           VerticalAlignment="Center" Margin="0,0,7,0"/>
-                            <TextBlock Text="Asistente — 3 opciones de respuesta"
-                                       Foreground="White" FontWeight="Bold" FontSize="13"
-                                       VerticalAlignment="Center"/>
-                        </StackPanel>
-                        <Button Click="CloseAssistantPanel_Click" HorizontalAlignment="Right"
-                                Style="{StaticResource IconBtn}" Foreground="#666">
-                            <ui:SymbolIcon Symbol="Dismiss24"/>
-                        </Button>
-                    </Grid>
-                    <StackPanel Grid.Row="1" Margin="0,0,0,10">
-                        <TextBlock Text="Contexto:" Foreground="#44FFFFFF"
-                                   FontSize="10" Margin="0,0,0,3"/>
-                        <Border Background="#15FFFFFF" CornerRadius="4" Padding="8">
-                            <TextBlock x:Name="AssistantContextText" Text="Esperando contexto..."
-                                       Foreground="White" TextWrapping="Wrap"
-                                       FontStyle="Italic" MaxHeight="55"
-                                       TextTrimming="CharacterEllipsis" FontSize="11"/>
-                        </Border>
-                    </StackPanel>
-                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-                        <StackPanel>
-                            <TextBlock Text="Respuestas sugeridas:" Foreground="#FFD700"
-                                       FontSize="11" FontWeight="SemiBold" Margin="0,4,0,8"/>
-                            <TextBlock x:Name="AssistantLoadingText" Text="Analizando..."
-                                       Foreground="#888" FontSize="12"
-                                       Margin="0,0,0,8" Visibility="Collapsed"/>
-                            <ItemsControl x:Name="AssistantSuggestionsList">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Background="#12FFFFFF" CornerRadius="6"
-                                                Margin="0,0,0,8" Padding="10">
-                                            <Grid>
-                                                <Grid.RowDefinitions>
-                                                    <RowDefinition Height="Auto"/>
-                                                    <RowDefinition Height="Auto"/>
-                                                    <RowDefinition Height="Auto"/>
-                                                    <RowDefinition Height="Auto"/>
-                                                </Grid.RowDefinitions>
-                                                <Grid Grid.Row="0" Margin="0,0,0,4">
-                                                    <TextBlock Text="{Binding Title}" FontWeight="Bold"
-                                                               Foreground="#AAFFD700" FontSize="11"/>
-                                                    <Button HorizontalAlignment="Right"
-                                                            Click="CopyAssistantSuggestion_Click"
-                                                            Tag="{Binding Text}"
-                                                            Style="{StaticResource IconBtn}"
-                                                            Padding="3,2" ToolTip="Copiar">
-                                                        <ui:SymbolIcon Symbol="Copy24"/>
-                                                    </Button>
-                                                </Grid>
-                                                <TextBlock Grid.Row="1" Text="{Binding Text}"
-                                                           Foreground="White" FontSize="12"
-                                                           TextWrapping="Wrap" Margin="0,0,0,5"/>
-                                                <TextBlock Grid.Row="2" Text="{Binding Pronunciation}"
-                                                           Foreground="#55FFD700" FontSize="10"
-                                                           FontStyle="Italic" TextWrapping="Wrap"
-                                                           Margin="0,0,0,5">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Visibility" Value="Visible"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding Pronunciation}" Value="">
-                                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-                                                <Border Grid.Row="3" Background="#0A000000"
-                                                        CornerRadius="4" Padding="5">
-                                                    <TextBlock Text="{Binding Translation}"
-                                                               Foreground="#AAA" FontStyle="Italic"
-                                                               FontSize="11" TextWrapping="Wrap"/>
-                                                </Border>
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </ScrollViewer>
-                    <StackPanel Grid.Row="3" Orientation="Horizontal"
-                                HorizontalAlignment="Right" Margin="0,8,0,0">
-                        <TextBlock x:Name="AssistantStatusText" Text="" Foreground="#444"
-                                   FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <Button Content="Actualizar" Click="RefreshAssistantPanel_Click"
-                                Background="#1AFFFFFF" Foreground="#888"
-                                BorderThickness="0" Padding="10,4" Cursor="Hand">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border x:Name="b" Background="{TemplateBinding Background}"
-                                            CornerRadius="4" Padding="{TemplateBinding Padding}">
-                                        <ContentPresenter HorizontalAlignment="Center"/>
-                                    </Border>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="b" Property="Background" Value="#2AFFFFFF"/>
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </Button.Template>
-                        </Button>
-                    </StackPanel>
-                </Grid>
-            </Border>
-
-            <!-- Session panel overlay -->
-            <Border x:Name="SessionPanel" Grid.Row="0" Grid.RowSpan="3"
-                    Background="#FA111111" CornerRadius="10" Margin="16"
-                    Visibility="Collapsed" Panel.ZIndex="200"
-                    BorderBrush="#33FFFFFF" BorderThickness="1">
-                <Grid Margin="20">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,14">
-                        <TextBlock Text="Sesiones Guardadas" FontSize="18" FontWeight="Bold"
-                                   Foreground="White" VerticalAlignment="Center"/>
-                        <Button Click="CloseSessions_Click" DockPanel.Dock="Right"
-                                Style="{StaticResource IconBtn}" Foreground="#AAA">
-                            <ui:SymbolIcon Symbol="Dismiss24"/>
-                        </Button>
-                    </DockPanel>
-                    <Grid Grid.Row="1" Margin="0,0,0,12">
+                <!-- ── Row 0: Custom Header / Titlebar ── -->
+                <Border Grid.Row="0" Background="#0CFFFFFF" BorderBrush="#14FFFFFF" BorderThickness="0,0,0,1">
+                    <Grid Margin="16,6,16,6">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <Border Grid.Column="0" Background="#1AFFFFFF" CornerRadius="4" Margin="0,0,10,0">
-                            <TextBox x:Name="SearchSessionsBox" Text="Buscar..."
-                                     GotFocus="SearchSessionsBox_GotFocus"
-                                     LostFocus="SearchSessionsBox_LostFocus"
-                                     KeyUp="SearchSessionsBox_KeyUp"
-                                     Background="Transparent" Foreground="#AAA"
-                                     BorderThickness="0" Padding="10,7"/>
-                        </Border>
-                        <Button Grid.Column="1" Click="NewSession_Click"
-                                Background="#4CAF50" Foreground="White"
-                                BorderThickness="0" Padding="14,7">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border Background="{TemplateBinding Background}"
-                                            CornerRadius="4" Padding="{TemplateBinding Padding}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="+" Margin="0,0,5,0" FontWeight="Bold"/>
-                                            <TextBlock Text="Nueva"/>
-                                        </StackPanel>
-                                    </Border>
-                                </ControlTemplate>
-                            </Button.Template>
-                        </Button>
+
+                        <!-- Left state display -->
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border x:Name="ModeIndicatorBadge" Background="#4CAF50"
+                                    CornerRadius="10" Padding="8,3" Margin="0,0,8,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock x:Name="ModeIcon" Text="⚡" FontSize="10"
+                                               Foreground="White" Margin="0,0,3,0" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="ModeText" Text="LIVE" FontSize="10"
+                                               FontWeight="Bold" Foreground="White"/>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock x:Name="StatusText" Text="Listo"
+                                       Foreground="#999" FontSize="11" VerticalAlignment="Center"/>
+                            <Border x:Name="LmStudioStatusBadge" Background="#22444444"
+                                    CornerRadius="6" Padding="6,2" Margin="8,0,0,0"
+                                    VerticalAlignment="Center">
+                                <TextBlock x:Name="LmStudioStatusText" Text="● LM Studio"
+                                           Foreground="#AAA" FontSize="10"/>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Middle active session name -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Button x:Name="BtnSessions" Click="Sessions_Click"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                    ToolTip="Historial de sesiones">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="History24" Foreground="#555"
+                                                   Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="CurrentSessionTitle" Text="Nueva Sesión"
+                                               FontSize="10" Foreground="#666"/>
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="BtnRenameSession" Click="RenameSession_Click"
+                                    Style="{StaticResource IconBtn}" ToolTip="Renombrar sesión" Padding="4,2">
+                                <ui:SymbolIcon Symbol="Edit24" Foreground="#666"/>
+                            </Button>
+                            <Border x:Name="SessionRenamePanel" Visibility="Collapsed"
+                                    Background="#1AFFFFFF" CornerRadius="4" Padding="6,2">
+                                <TextBox x:Name="SessionTitleBox" Background="Transparent"
+                                         Foreground="White" BorderThickness="0" FontSize="10"
+                                         MinWidth="120"
+                                         KeyDown="SessionTitleBox_KeyDown"
+                                         LostFocus="SessionTitleBox_LostFocus"/>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Right Control buttons -->
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border x:Name="PrimaryButtonBorder" Background="#4CAF50"
+                                    CornerRadius="10" Cursor="Hand" Margin="0,0,10,0"
+                                    MouseLeftButtonDown="PrimaryAction_Click"
+                                    Style="{StaticResource PillBtn}" ToolTip="Pausar / Reanudar">
+                                <StackPanel Orientation="Horizontal" Margin="8,3">
+                                    <TextBlock x:Name="PrimaryButtonIcon" Text="⏸️" FontSize="11"
+                                               Foreground="White" Margin="0,0,3,0" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="PrimaryButtonText" Text="Pausar" FontSize="10"
+                                               FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Width="1" Background="#18FFFFFF" Margin="0,2,8,2"/>
+
+                            <Button Click="Vocabulary_Click" Style="{StaticResource IconBtn}"
+                                    ToolTip="Vocabulario" Padding="5,3" Visibility="Collapsed"/>
+                            <Button x:Name="BtnQuickAssistHeader" Click="Copilot_Click"
+                                    Style="{StaticResource IconBtn}" ToolTip="Asistente (Ctrl+Space)" Padding="5,3">
+                                <ui:SymbolIcon Symbol="Lightbulb24"/>
+                            </Button>
+                            <Button x:Name="BtnMicToggle" Click="MicToggle_Click"
+                                    Style="{StaticResource IconBtn}" ToolTip="Activar/desactivar micrófono" Padding="5,3">
+                                <ui:SymbolIcon Symbol="Mic24"/>
+                            </Button>
+
+                            <Border Width="1" Background="#18FFFFFF" Margin="6,2,6,2"/>
+
+                            <Button x:Name="BtnMinimize" Click="Minimize_Click"
+                                    Style="{StaticResource IconBtn}" ToolTip="Minimizar" Padding="5,3">
+                                <ui:SymbolIcon Symbol="ChevronDown24"/>
+                            </Button>
+                            <Button Click="CloseApp_Click" Style="{StaticResource IconBtn}"
+                                    ToolTip="Cerrar" Padding="5,3">
+                                <ui:SymbolIcon Symbol="Dismiss24"/>
+                            </Button>
+                        </StackPanel>
                     </Grid>
-                    <ListBox x:Name="SessionsList" Grid.Row="2" Background="Transparent"
-                             BorderThickness="0" MouseDoubleClick="SessionsList_MouseDoubleClick"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             Margin="0,0,0,12">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="#12FFFFFF" CornerRadius="6"
-                                        Padding="12" Margin="0,0,0,6" Cursor="Hand">
-                                    <DockPanel>
-                                        <TextBlock Text="{Binding StartTime, StringFormat='MMM dd, HH:mm'}"
-                                                   Foreground="#666" FontSize="11"
-                                                   DockPanel.Dock="Right" VerticalAlignment="Top"/>
-                                        <StackPanel>
-                                            <TextBlock Text="{Binding Title}" FontWeight="Bold"
-                                                       Foreground="White" FontSize="13" Margin="0,0,0,3"/>
-                                            <TextBlock Text="{Binding Summary}" Foreground="#777"
-                                                       FontSize="11" TextTrimming="CharacterEllipsis"/>
-                                            <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
-                                                <TextBlock Text="{Binding Entries.Count, StringFormat='Entradas: {0}'}"
-                                                           Foreground="#555" FontSize="10" Margin="0,0,10,0"/>
-                                                <TextBlock Text="{Binding Questions.Count, StringFormat='Preguntas: {0}'}"
-                                                           Foreground="#555" FontSize="10"/>
-                                            </StackPanel>
+                </Border>
+
+                <!-- ── Row 1: Swappable Panels Area ── -->
+                <Grid Grid.Row="1">
+
+                    <!-- ===================================================
+                         PANEL 1: EN VIVO (LIVE SESSION)
+                         =================================================== -->
+                    <Grid x:Name="LiveViewPanel" Visibility="Visible">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- 4 quadrants (2×2 grid) -->
+                        <Grid Grid.Row="0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="1"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="1"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Background="#28FFFFFF"/>
+                            <Border Grid.Row="0" Grid.Column="1" Grid.RowSpan="3" Background="#28FFFFFF"/>
+
+                            <!-- Q1 — EN Transcripción (top-left) -->
+                            <Border Grid.Row="0" Grid.Column="0" Background="#0EFFFFFF">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <DockPanel Grid.Row="0" Margin="16,7,16,4">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="EN" Foreground="#4CAF50" FontSize="10" FontWeight="Bold" Margin="0,0,6,0"/>
+                                            <TextBlock Text="TRANSCRIPCIÓN EN VIVO" Style="{StaticResource PanelLabel}"/>
                                         </StackPanel>
                                     </DockPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="Eliminar" Click="DeleteSession_Click"
-                                Background="#33FF4444" Foreground="#FF8888"
-                                BorderThickness="0" Padding="12,7" Margin="0,0,8,0">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border Background="{TemplateBinding Background}" CornerRadius="4"
-                                            Padding="{TemplateBinding Padding}">
-                                        <TextBlock Text="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"/>
-                                    </Border>
-                                </ControlTemplate>
-                            </Button.Template>
-                        </Button>
-                        <Button Content="Exportar Markdown" Click="ExportSession_Click"
-                                Background="#1AFFFFFF" Foreground="White"
-                                BorderThickness="0" Padding="14,7">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border Background="{TemplateBinding Background}" CornerRadius="4"
-                                            Padding="{TemplateBinding Padding}">
-                                        <TextBlock Text="{TemplateBinding Content}"/>
-                                    </Border>
-                                </ControlTemplate>
-                            </Button.Template>
-                        </Button>
-                    </StackPanel>
-                </Grid>
-            </Border>
-
-            <!-- Settings panel overlay -->
-            <Border x:Name="SettingsPanel" Grid.Row="0" Grid.RowSpan="3"
-                    HorizontalAlignment="Right" VerticalAlignment="Top"
-                    Margin="0,44,10,0" Background="#F0111111" CornerRadius="10"
-                    BorderBrush="#22FFFFFF" BorderThickness="1"
-                    Visibility="Collapsed" Panel.ZIndex="100" Width="260">
-                <DockPanel Margin="15">
-                    <TextBlock DockPanel.Dock="Top" Text="Configuración"
-                               Foreground="White" FontWeight="Bold" Margin="0,0,0,12"/>
-                    <ScrollViewer DockPanel.Dock="Top" VerticalScrollBarVisibility="Auto" MaxHeight="500">
-                        <StackPanel>
-                            <TextBlock Text="Tu nombre" Foreground="#666" FontSize="11" Margin="0,0,0,3"/>
-                            <Border Background="#1AFFFFFF" CornerRadius="4" Margin="0,0,0,10">
-                                <TextBox x:Name="UserNameBox" Text="Charlie"
-                                         TextChanged="UserNameBox_TextChanged"
-                                         Background="Transparent" Foreground="White"
-                                         BorderThickness="0" Padding="8,6"/>
+                                    <ScrollViewer Grid.Row="1" x:Name="TranscriptionScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <TextBlock x:Name="TranscriptionText" Text="Esperando audio..." Foreground="White" FontSize="16" FontFamily="Segoe UI" TextWrapping="Wrap" Margin="16,2,16,12" LineHeight="24">
+                                            <TextBlock.Effect>
+                                                <DropShadowEffect ShadowDepth="0" BlurRadius="6" Color="Black" Opacity="0.3"/>
+                                            </TextBlock.Effect>
+                                        </TextBlock>
+                                    </ScrollViewer>
+                                </Grid>
                             </Border>
-                            <TextBlock Text="Nivel de inglés" Foreground="#666" FontSize="11" Margin="0,0,0,3"/>
-                            <ComboBox x:Name="LevelCombo" Height="28" Margin="0,0,0,14"
-                                      SelectionChanged="LevelCombo_SelectionChanged">
-                                <ComboBoxItem Content="A2"/>
-                                <ComboBoxItem Content="B1" IsSelected="True"/>
-                                <ComboBoxItem Content="B2"/>
-                                <ComboBoxItem Content="C1"/>
-                            </ComboBox>
-                            <Separator Background="#18FFFFFF" Margin="0,0,0,12"/>
-                            <TextBlock Text="Micrófono" Foreground="#666" FontSize="11" Margin="0,0,0,3"/>
-                            <ComboBox x:Name="ComboMicrophones"
-                                      SelectionChanged="ComboMicrophones_SelectionChanged"
-                                      Height="26" Margin="0,0,0,8"/>
-                            <ui:Button Content="Probar sistema" Click="TestSystem_Click"
-                                       Appearance="Secondary" Height="26" Margin="0,0,0,6"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                <TextBlock Text="Mic:" Foreground="#555" FontSize="11"
-                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                <ProgressBar x:Name="MicLevelBar" Width="90" Height="4"
-                                             Maximum="1" Background="#222"
-                                             Foreground="#00FF00" BorderThickness="0"/>
-                            </StackPanel>
-                            <TextBlock x:Name="TestResultText" Text="" Foreground="#FFAAAA"
-                                       FontSize="11" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                            <Separator Background="#18FFFFFF" Margin="0,0,0,12"/>
-                            <CheckBox Content="Siempre visible" Foreground="#999"
-                                      IsChecked="True"
-                                      Checked="Topmost_Checked" Unchecked="Topmost_Unchecked"
-                                      Margin="0,0,0,10"/>
-                            <Separator Background="#18FFFFFF" Margin="0,0,0,12"/>
-                            <TextBlock Text="Opacidad de la ventana" Foreground="#666" FontSize="11" Margin="0,0,0,4"/>
-                            <Slider x:Name="MainOpacitySlider"
-                                    Minimum="0.05" Maximum="0.95" Value="0.45"
-                                    SmallChange="0.05" LargeChange="0.1"
-                                    Margin="0,0,0,12"
-                                    ValueChanged="Slider_ValueChanged"/>
-                            <Separator Background="#18FFFFFF" Margin="0,0,0,12"/>
-                            <TextBlock Text="LM Studio (traducción / IA)" Foreground="#666"
-                                       FontSize="11" Margin="0,0,0,3"/>
-                            <Grid Margin="0,0,0,4">
+
+                            <!-- Q2 — ES Traducción (top-right) -->
+                            <Border Grid.Row="0" Grid.Column="2" Background="#0A001020">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <DockPanel Grid.Row="0" Margin="16,7,16,4">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="ES" Foreground="#4B9CF6" FontSize="10" FontWeight="Bold" Margin="0,0,6,0"/>
+                                            <TextBlock Text="TRADUCCIÓN" Style="{StaticResource PanelLabel}"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="TranslationStatus" DockPanel.Dock="Right" Text="" Foreground="#999" FontSize="11" VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                    <ScrollViewer Grid.Row="1" x:Name="TranslationScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <TextBlock x:Name="TranslationText" Text="La traducción aparecerá automáticamente..." Foreground="#DDFFFFFF" FontSize="16" FontFamily="Segoe UI" TextWrapping="Wrap" FontStyle="Italic" Margin="16,2,16,12" LineHeight="24">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Opacity" Value="1"/>
+                                                    <Style.Triggers>
+                                                        <Trigger Property="Text" Value="La traducción aparecerá automáticamente...">
+                                                            <Setter Property="Opacity" Value="0.25"/>
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Border>
+
+                            <!-- Q3 — Pregunta detectada (bottom-left) -->
+                            <Border Grid.Row="2" Grid.Column="0" Background="#0A180000">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="1"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="1"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <DockPanel Grid.Row="0" Margin="16,7,16,4">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ui:SymbolIcon Symbol="QuestionCircle24" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="PREGUNTA DETECTADA" Style="{StaticResource PanelLabel}"/>
+                                        </StackPanel>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                            <Button Click="CopyQuestion_Click" Style="{StaticResource IconBtn}" Padding="6,4" ToolTip="Copiar pregunta" Margin="0,0,4,0">
+                                                <ui:SymbolIcon Symbol="Copy24"/>
+                                            </Button>
+                                            <Border x:Name="QuestionBadgeBorder" Background="#CC1E3A5F" CornerRadius="8" Padding="6,2" Visibility="Collapsed">
+                                                <TextBlock x:Name="QuestionBadge" Text="❓ Pregunta" Foreground="#7EC8E3" FontSize="10" FontWeight="SemiBold"/>
+                                            </Border>
+                                        </StackPanel>
+                                    </DockPanel>
+
+                                    <ScrollViewer Grid.Row="1" x:Name="QuestionScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <TextBlock x:Name="QuestionText" Text="Esperando pregunta del profesor..." Foreground="White" FontSize="15" FontFamily="Segoe UI" TextWrapping="Wrap" Margin="16,4,16,8" LineHeight="22"/>
+                                    </ScrollViewer>
+
+                                    <DockPanel Grid.Row="2" Margin="16,4,16,2">
+                                        <TextBlock Text="CONTEXTO" Foreground="#999" FontSize="11" FontWeight="SemiBold"/>
+                                    </DockPanel>
+
+                                    <Border Grid.Row="3" Background="#28FFFFFF"/>
+
+                                    <ScrollViewer Grid.Row="4" x:Name="QuestionContextScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel x:Name="QuestionContextStack" Margin="16,4,16,8">
+                                            <TextBlock x:Name="QuestionContextPlaceholder" Text="El contexto de la pregunta aparecerá aquí..." Foreground="#BBCCE8FF" FontSize="12" FontFamily="Segoe UI" TextWrapping="Wrap" FontStyle="Italic" LineHeight="18" Opacity="0.5"/>
+                                        </StackPanel>
+                                    </ScrollViewer>
+
+                                    <Border Grid.Row="5" Background="#28FFFFFF"/>
+
+                                    <!-- Chat manual -->
+                                    <Border Grid.Row="6" Background="#0AFFFFFF" Margin="8,5,8,6" CornerRadius="6" BorderBrush="#1AFFFFFF" BorderThickness="1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Grid Grid.Column="0">
+                                                <TextBox x:Name="ManualQuestionBox" Background="Transparent" Foreground="White" BorderThickness="0" Padding="10,7" FontSize="12" CaretBrush="White" KeyDown="ManualQuestion_KeyDown" TextChanged="ManualQuestionBox_TextChanged" VerticalContentAlignment="Center"/>
+                                                <TextBlock x:Name="ManualQuestionHint" Text="Pregunta manual... (Enter para enviar)" Foreground="#66FFFFFF" FontSize="11" FontStyle="Italic" IsHitTestVisible="False" Margin="11,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                            <Button Grid.Column="1" Click="ManualQuestion_Submit" Style="{StaticResource IconBtn}" Padding="10,6" ToolTip="Enviar pregunta (Enter)">
+                                                <ui:SymbolIcon Symbol="Send24" Foreground="#FFD700"/>
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+                                </Grid>
+                            </Border>
+
+                            <!-- Q4 — Sugerencia de respuesta (bottom-right) -->
+                            <Border Grid.Row="2" Grid.Column="2" Background="#0A000A1A">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="2"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="1"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <DockPanel Grid.Row="0" Margin="16,7,16,4" LastChildFill="False">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ui:SymbolIcon Symbol="Lightbulb24" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="OPCIONES DE RESPUESTA" Style="{StaticResource PanelLabel}"/>
+                                        </StackPanel>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Button Click="RegenerateAnswers_Click" Style="{StaticResource IconBtn}"
+                                                    ToolTip="Regenerar respuestas" Padding="4,2" Margin="0,0,6,0">
+                                                <ui:SymbolIcon Symbol="ArrowCounterclockwise24" Foreground="#AAA"/>
+                                            </Button>
+                                            <TextBlock x:Name="ResponseStatus" Text="" Foreground="#999" FontSize="11" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </DockPanel>
+
+                                    <ProgressBar x:Name="ResponseLoadingBar" Grid.Row="1" IsIndeterminate="True" Background="Transparent" Foreground="#88FFD700" BorderThickness="0" Visibility="Collapsed"/>
+
+                                    <DockPanel Grid.Row="2" Margin="16,4,16,2">
+                                        <TextBlock Text="EN" Foreground="#999" FontSize="11" FontWeight="SemiBold"/>
+                                        <Button DockPanel.Dock="Right" Click="CopyEnOptions_Click" Style="{StaticResource IconBtn}" Padding="5,3" ToolTip="Copiar opciones en inglés">
+                                            <ui:SymbolIcon Symbol="Copy24"/>
+                                        </Button>
+                                    </DockPanel>
+
+                                    <ScrollViewer Grid.Row="3" x:Name="ResponseScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel x:Name="ResponseEnStack" Margin="16,2,16,6">
+                                            <TextBlock x:Name="ResponseEnPlaceholder" Text="Las opciones aparecerán al detectar una pregunta..." Foreground="#FFD700" FontSize="13" FontFamily="Segoe UI" TextWrapping="Wrap" LineHeight="20" Opacity="0.5"/>
+                                        </StackPanel>
+                                    </ScrollViewer>
+
+                                    <Border Grid.Row="4" Background="#28FFFFFF"/>
+
+                                    <DockPanel Grid.Row="5" Margin="16,4,16,2">
+                                        <TextBlock Text="ES" Foreground="#999" FontSize="11" FontWeight="SemiBold"/>
+                                        <Button DockPanel.Dock="Right" Click="CopyEsOptions_Click" Style="{StaticResource IconBtn}" Padding="5,3" ToolTip="Copiar opciones en español">
+                                            <ui:SymbolIcon Symbol="Copy24"/>
+                                        </Button>
+                                    </DockPanel>
+
+                                    <ScrollViewer Grid.Row="6" x:Name="ResponseEsScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel x:Name="ResponseEsStack" Margin="16,2,16,6">
+                                            <TextBlock x:Name="ResponseEsPlaceholder" Text="Las opciones en español aparecerán aquí..." Foreground="White" FontSize="13" FontFamily="Segoe UI" TextWrapping="Wrap" LineHeight="20" Opacity="0.5"/>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Action Bar (Translate, Clear, etc) on Row 1 -->
+                        <Border Grid.Row="1" Background="#18FFFFFF" BorderBrush="#28FFFFFF" BorderThickness="0,1,0,0" Padding="14,6">
+                            <Grid>
+                                <Grid x:Name="LiveActionPanel" Visibility="Visible">
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                        <Border x:Name="TranslateButtonBorder" Background="#1A2B7CE6" CornerRadius="10" Cursor="Hand" Margin="0,0,8,0" MouseLeftButtonDown="Translate_Click" Style="{StaticResource PillBtn}" ToolTip="Traducir la transcripción (Ctrl+T)">
+                                            <StackPanel Orientation="Horizontal" Margin="12,5">
+                                                <ui:SymbolIcon Symbol="Globe24" Foreground="#7EC3FF" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                                <TextBlock Text="Traducir" FontSize="11" FontWeight="SemiBold" Foreground="#7EC3FF" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Button Click="ClearHistory_Click" Style="{StaticResource IconBtn}" ToolTip="Limpiar todos los paneles (Ctrl+Shift+C)" Padding="7,4">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon Symbol="Delete24" Margin="0,0,4,0"/>
+                                                <TextBlock Text="Limpiar" FontSize="11" Foreground="#AAAAAA"/>
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Click="GenerateSummary_Click" Style="{StaticResource IconBtn}" ToolTip="Generar resumen de la clase" Padding="7,4">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon Symbol="DocumentText24" Margin="0,0,4,0"/>
+                                                <TextBlock Text="Resumen" FontSize="11" Foreground="#AAAAAA"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Review Mode Audio Player Panel (Fase 3) -->
+                                <Grid x:Name="ReviewPlayerPanel" Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="0,0,10,0">
+                                        <Button x:Name="BtnPlayerPlay" Click="PlayerPlay_Click" Style="{StaticResource IconBtn}" Padding="8,4" ToolTip="Reproducir">
+                                            <ui:SymbolIcon Symbol="Play24" Foreground="LightGreen"/>
+                                        </Button>
+                                        <Button x:Name="BtnPlayerPause" Click="PlayerPause_Click" Style="{StaticResource IconBtn}" Padding="8,4" ToolTip="Pausar" Visibility="Collapsed">
+                                            <ui:SymbolIcon Symbol="Pause24" Foreground="Orange"/>
+                                        </Button>
+                                    </StackPanel>
+                                    <TextBlock x:Name="PlayerTimeText" Grid.Column="1" Text="00:00 / 00:00" Foreground="#AAA" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                    <Slider x:Name="PlayerSlider" Grid.Column="2" Minimum="0" Maximum="1" Value="0" VerticalAlignment="Center" PreviewMouseLeftButtonDown="PlayerSlider_PreviewMouseLeftButtonDown" PreviewMouseLeftButtonUp="PlayerSlider_PreviewMouseLeftButtonUp" ValueChanged="PlayerSlider_ValueChanged"/>
+                                    <Button Grid.Column="3" Click="ExitReview_Click" Style="{StaticResource IconBtn}" Padding="10,4" Foreground="#FF8888" Margin="12,0,0,0">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="Dismiss24" Margin="0,0,4,0" Foreground="#FF8888"/>
+                                            <TextBlock Text="Salir de revisión" FontSize="11" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                            </Grid>
+                        </Border>
+
+                        <!-- Assistant suggestions overlay panel -->
+                        <Border x:Name="SuggestionsOverlay" Grid.Row="0" Background="#F01e293b" CornerRadius="8" Margin="15" Visibility="Collapsed" Padding="20" Panel.ZIndex="50">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid Grid.Row="0" Margin="0,0,0,10">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="Sparkle24" Foreground="#FFD700" VerticalAlignment="Center" Margin="0,0,7,0"/>
+                                        <TextBlock Text="Asistente — 3 opciones de respuesta" Foreground="White" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <Button Click="CloseAssistantPanel_Click" HorizontalAlignment="Right" Style="{StaticResource IconBtn}" Foreground="#666">
+                                        <ui:SymbolIcon Symbol="Dismiss24"/>
+                                    </Button>
+                                </Grid>
+                                <StackPanel Grid.Row="1" Margin="0,0,0,10">
+                                    <TextBlock Text="Contexto:" Foreground="#44FFFFFF" FontSize="10" Margin="0,0,0,3"/>
+                                    <Border Background="#15FFFFFF" CornerRadius="4" Padding="8">
+                                        <TextBlock x:Name="AssistantContextText" Text="Esperando contexto..." Foreground="White" TextWrapping="Wrap" FontStyle="Italic" MaxHeight="55" TextTrimming="CharacterEllipsis" FontSize="11"/>
+                                    </Border>
+                                </StackPanel>
+                                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel>
+                                        <TextBlock Text="Respuestas sugeridas:" Foreground="#FFD700" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,8"/>
+                                        <TextBlock x:Name="AssistantLoadingText" Text="Analizando..." Foreground="#888" FontSize="12" Margin="0,0,0,8" Visibility="Collapsed"/>
+                                        <ItemsControl x:Name="AssistantSuggestionsList">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="#12FFFFFF" CornerRadius="6" Margin="0,0,0,8" Padding="10">
+                                                        <Grid>
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="Auto"/>
+                                                                <RowDefinition Height="Auto"/>
+                                                                <RowDefinition Height="Auto"/>
+                                                                <RowDefinition Height="Auto"/>
+                                                            </Grid.RowDefinitions>
+                                                            <Grid Grid.Row="0" Margin="0,0,0,4">
+                                                                <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="#AAFFD700" FontSize="11"/>
+                                                                <Button HorizontalAlignment="Right" Click="CopyAssistantSuggestion_Click" Tag="{Binding Text}" Style="{StaticResource IconBtn}" Padding="3,2" ToolTip="Copiar">
+                                                                    <ui:SymbolIcon Symbol="Copy24"/>
+                                                                </Button>
+                                                            </Grid>
+                                                            <TextBlock Grid.Row="1" Text="{Binding Text}" Foreground="White" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,5"/>
+                                                            <TextBlock Grid.Row="2" Text="{Binding Pronunciation}" Foreground="#55FFD700" FontSize="10" FontStyle="Italic" TextWrapping="Wrap" Margin="0,0,0,5">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding Pronunciation}" Value="">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                            <Border Grid.Row="3" Background="#0A000000" CornerRadius="4" Padding="5">
+                                                                <TextBlock Text="{Binding Translation}" Foreground="#AAA" FontStyle="Italic" FontSize="11" TextWrapping="Wrap"/>
+                                                            </Border>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </ScrollViewer>
+                                <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                    <TextBlock x:Name="AssistantStatusText" Text="" Foreground="#444" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <Button Content="Actualizar" Click="RefreshAssistantPanel_Click" Background="#1AFFFFFF" Foreground="#888" BorderThickness="0" Padding="10,4" Cursor="Hand">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                    <TextBlock Text="{TemplateBinding Content}"/>
+                                                </Border>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <!-- ===================================================
+                         PANEL 2: HISTORIAL DE SESIONES (T3.3 & T4.3)
+                         =================================================== -->
+                    <Border x:Name="HistoryPanel" Visibility="Collapsed"
+                            Background="#F90A0A10" CornerRadius="0" Padding="20">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,14">
+                                <TextBlock Text="Historial de Sesiones" FontSize="18" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            
+                            <Grid Grid.Row="1" Margin="0,0,0,12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <ComboBox x:Name="LmStudioModelCombo" Height="28" Grid.Column="0"
-                                          Margin="0,0,6,0"
-                                          SelectionChanged="LmStudioModelCombo_SelectionChanged"/>
-                                <ui:Button Grid.Column="1" Content="↻" Click="RefreshLmStudioModels_Click"
-                                           Width="32" Height="32" Appearance="Secondary"
-                                           ToolTip="Recargar modelos"/>
+                                <Border Grid.Column="0" Background="#1AFFFFFF" CornerRadius="4" Margin="0,0,10,0">
+                                    <TextBox x:Name="SearchSessionsBox" Text="Buscar..." GotFocus="SearchSessionsBox_GotFocus" LostFocus="SearchSessionsBox_LostFocus" KeyUp="SearchSessionsBox_KeyUp" Background="Transparent" Foreground="#AAA" BorderThickness="0" Padding="10,7"/>
+                                </Border>
+                                <Button Grid.Column="1" Click="NewSession_Click" Background="#4CAF50" Foreground="White" BorderThickness="0" Padding="14,7">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="+" Margin="0,0,5,0" FontWeight="Bold"/>
+                                                    <TextBlock Text="Nueva Sesión"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
                             </Grid>
-                            <TextBlock x:Name="LmStudioModelStatus" Text="" Foreground="#999"
-                                       FontSize="10" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                            <Separator Background="#18FFFFFF" Margin="0,0,0,12"/>
-                            <ui:Button x:Name="BtnBrowserScanSettings" Click="BrowserScan_Click"
-                                       Appearance="Secondary" Height="30" Margin="0,0,0,12">
-                                <ui:Button.Content>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="🌐" FontSize="13" Margin="0,0,6,0"/>
-                                        <TextBlock Text="Escanear navegador" FontSize="11"/>
-                                    </StackPanel>
-                                </ui:Button.Content>
-                            </ui:Button>
-                            <!-- WhisperModelCombo kept for XAML compatibility -->
-                            <ComboBox x:Name="WhisperModelCombo" Height="1" Margin="0"
-                                      IsEnabled="False" Visibility="Collapsed"
-                                      SelectionChanged="WhisperModelCombo_SelectionChanged"/>
-                            <ui:Button Content="Cerrar" Click="CloseSettings_Click"
-                                       Appearance="Secondary" Height="30"/>
-                        </StackPanel>
-                    </ScrollViewer>
-                </DockPanel>
-            </Border>
+                            
+                            <ListBox x:Name="SessionsList" Grid.Row="2" Background="Transparent" BorderThickness="0" MouseDoubleClick="SessionsList_MouseDoubleClick" ScrollViewer.HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,12">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#12FFFFFF" CornerRadius="6" Padding="12" Margin="0,0,0,6" Cursor="Hand">
+                                            <DockPanel>
+                                                <TextBlock Text="{Binding StartTime, StringFormat='MMM dd, HH:mm'}" Foreground="#666" FontSize="11" DockPanel.Dock="Right" VerticalAlignment="Top"/>
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="White" FontSize="13" Margin="0,0,0,3"/>
+                                                    <TextBlock Text="{Binding Summary}" Foreground="#777" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                                        <TextBlock Text="{Binding Entries.Count, StringFormat='Entradas: {0}'}" Foreground="#555" FontSize="10" Margin="0,0,10,0"/>
+                                                        <TextBlock Text="{Binding Questions.Count, StringFormat='Preguntas: {0}'}" Foreground="#555" FontSize="10"/>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </DockPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            
+                            <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="Eliminar" Click="DeleteSession_Click" Background="#33FF4444" Foreground="#FF8888" BorderThickness="0" Padding="12,7" Margin="0,0,8,0">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                <TextBlock Text="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+                                <Button Content="Importar Archivo" Click="ImportFile_Click" Background="#1AFFFFFF" Foreground="White" BorderThickness="0" Padding="14,7" Margin="0,0,8,0">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                <TextBlock Text="{TemplateBinding Content}"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+                                <Button Content="Exportar Markdown" Click="ExportSession_Click" Background="#1AFFFFFF" Foreground="White" BorderThickness="0" Padding="14,7">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                <TextBlock Text="{TemplateBinding Content}"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+                            </StackPanel>
 
+                            <!-- Import Progress Overlay (T4.3) -->
+                            <Border x:Name="ImportProgressOverlay" Grid.Row="0" Grid.RowSpan="4" Background="#F2111111" CornerRadius="10" Visibility="Collapsed" Margin="-20">
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="30">
+                                    <TextBlock Text="🎬 Importando y Transcribiendo Archivo..." Foreground="White" FontSize="15" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                                    <TextBlock x:Name="ImportStatusText" Text="Extrayendo pista de audio..." Foreground="#AAA" FontSize="12" HorizontalAlignment="Center" Margin="0,0,0,20"/>
+                                    <ProgressBar x:Name="ImportProgressBar" Width="300" Height="8" Minimum="0" Maximum="100" Value="0" Foreground="LightGreen" Background="#222" BorderThickness="0"/>
+                                    <TextBlock x:Name="ImportPercentText" Text="0%" Foreground="#888" FontSize="11" HorizontalAlignment="Center" Margin="0,8,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <!-- ===================================================
+                         PANEL 3: VOCABULARIO INTEGRADO (T5.3)
+                         =================================================== -->
+                    <Border x:Name="VocabularyPanel" Visibility="Collapsed"
+                            Background="#F90A0A10" CornerRadius="0" Padding="20">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/> <!-- Header -->
+                                <RowDefinition Height="Auto"/> <!-- Search & Actions -->
+                                <RowDefinition Height="Auto"/> <!-- Add Word Form -->
+                                <RowDefinition Height="*"/>    <!-- DataGrid -->
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Text="Libro de Vocabulario" FontSize="18" FontWeight="Bold" Foreground="White" Margin="0,0,0,14"/>
+
+                            <!-- Search & Actions -->
+                            <Grid Grid.Row="1" Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Background="#1AFFFFFF" CornerRadius="4" Margin="0,0,10,0">
+                                    <TextBox x:Name="VocabSearchBox" Text="Buscar..." GotFocus="VocabSearchBox_GotFocus" LostFocus="VocabSearchBox_LostFocus" KeyUp="VocabSearchBox_KeyUp" Background="Transparent" Foreground="#AAA" BorderThickness="0" Padding="10,8" VerticalContentAlignment="Center"/>
+                                </Border>
+                                <ui:Button Grid.Column="1" Click="ExtractFromText_Click" Margin="0,0,8,0" Appearance="Secondary" ToolTip="Extrae vocabulario del texto copiado al portapapeles">
+                                    <ui:Button.Content>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="✨" Margin="0,0,5,0"/>
+                                            <TextBlock Text="Analizar portapapeles"/>
+                                        </StackPanel>
+                                    </ui:Button.Content>
+                                </ui:Button>
+                                <ui:Button Grid.Column="2" Click="AddWord_Click" Appearance="Primary">
+                                    <ui:Button.Content>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="+" Margin="0,0,5,0" FontWeight="Bold"/>
+                                            <TextBlock Text="Añadir Palabra"/>
+                                        </StackPanel>
+                                    </ui:Button.Content>
+                                </ui:Button>
+                            </Grid>
+
+                            <!-- Add Word Form (hidden by default) -->
+                            <Border x:Name="AddWordForm" Grid.Row="2" Background="#0D2A1A" CornerRadius="8" Padding="14,10" Margin="0,0,0,10" Visibility="Collapsed" BorderBrush="#44FFD700" BorderThickness="1">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="110"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="110"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Palabra:" Foreground="#AAA" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Border Grid.Column="1" Background="#1AFFFFFF" CornerRadius="4" Margin="0,0,8,0">
+                                        <TextBox x:Name="NewWordBox" Background="Transparent" Foreground="White" BorderThickness="0" Padding="6,4"/>
+                                    </Border>
+                                    <TextBlock Grid.Column="2" Text="Traducción:" Foreground="#AAA" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Border Grid.Column="3" Background="#1AFFFFFF" CornerRadius="4" Margin="0,0,8,0">
+                                        <TextBox x:Name="NewTransBox" Background="Transparent" Foreground="White" BorderThickness="0" Padding="6,4"/>
+                                    </Border>
+                                    <TextBlock Grid.Column="4" Text="Definición:" Foreground="#AAA" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Border Grid.Column="5" Background="#1AFFFFFF" CornerRadius="4" Margin="0,0,8,0">
+                                        <TextBox x:Name="NewDefBox" Background="Transparent" Foreground="White" BorderThickness="0" Padding="6,4"/>
+                                    </Border>
+                                    <StackPanel Grid.Column="6" Orientation="Horizontal" Margin="6,0,0,0">
+                                        <ui:Button Content="Guardar" Click="SaveNewWord_Click" Margin="0,0,6,0" Appearance="Primary"/>
+                                        <ui:Button Content="✕" Click="CancelAddWord_Click" Appearance="Secondary"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Vocabulary DataGrid -->
+                            <DataGrid x:Name="VocabGrid" Grid.Row="3" Background="Transparent" BorderThickness="0" HeadersVisibility="Column" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#22FFFFFF" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" RowBackground="Transparent" AlternatingRowBackground="#0DFFFFFF" Foreground="White" RowHeight="35">
+                                <DataGrid.Resources>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="Foreground" Value="#888"/>
+                                        <Setter Property="Padding" Value="10,5"/>
+                                        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                                    </Style>
+                                    <Style TargetType="DataGridCell">
+                                        <Setter Property="Padding" Value="10,0"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="DataGridCell">
+                                                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="0">
+                                                        <ContentPresenter VerticalAlignment="Center"/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                        <Style.Triggers>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter Property="Background" Value="#33FFFFFF"/>
+                                                <Setter Property="Foreground" Value="White"/>
+                                                <Setter Property="BorderThickness" Value="0"/>
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DataGrid.Resources>
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Palabra" Binding="{Binding Word}" Width="130" FontWeight="Bold"/>
+                                    <DataGridTextColumn Header="Traducción" Binding="{Binding SpanishTranslation}" Width="130" Foreground="#DDD"/>
+                                    <DataGridTextColumn Header="Definición" Binding="{Binding Definition}" Width="*"/>
+                                    <DataGridTextColumn Header="Nivel" Binding="{Binding Level}" Width="60"/>
+                                    <DataGridTextColumn Header="Visto" Binding="{Binding TimesEncountered}" Width="50"/>
+                                    <DataGridTemplateColumn Width="Auto">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Button Click="DeleteWord_Click" Tag="{Binding Id}" Style="{StaticResource CleanIconButtonStyle}" Padding="5" Foreground="#FF8888" ToolTip="Eliminar">
+                                                    <ui:SymbolIcon Symbol="Delete24"/>
+                                                </Button>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </Border>
+
+                    <!-- ===================================================
+                         PANEL 4: CONFIGURACIÓN INTEGRADA
+                         =================================================== -->
+                    <Border x:Name="SettingsPanel" Visibility="Collapsed"
+                            Background="#F90A0A10" CornerRadius="0" Padding="20">
+                        <DockPanel LastChildFill="True">
+                            <TextBlock DockPanel.Dock="Top" Text="Ajustes del Sistema" FontSize="18" FontWeight="Bold" Foreground="White" Margin="0,0,0,16"/>
+                            <ui:Button DockPanel.Dock="Bottom" Content="Guardar y Cerrar" Click="CloseSettings_Click" Appearance="Secondary" Height="30" Margin="0,12,0,0" Visibility="Collapsed"/>
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="0,0,10,0">
+                                    <TextBlock Text="Tema Visual (Fase 5)" Foreground="#FFD700" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,8"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                                        <RadioButton x:Name="ThemeDarkRadio" Content="Oscuro (Sugerido)" IsChecked="True" Checked="ThemeRadio_Checked" Foreground="White" Margin="0,0,16,0"/>
+                                        <RadioButton x:Name="ThemeLightRadio" Content="Claro" Checked="ThemeRadio_Checked" Foreground="White"/>
+                                    </StackPanel>
+                                    <Separator Background="#18FFFFFF" Margin="0,0,0,14"/>
+
+                                    <TextBlock Text="Hardware del Sistema (Fase 10)" Foreground="#FFD700" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,8"/>
+                                    <Border Background="#12FFFFFF" CornerRadius="6" Padding="12" Margin="0,0,0,16">
+                                        <StackPanel>
+                                            <TextBlock x:Name="HardwareCpuText" Text="CPU: Detectando..." Foreground="White" FontSize="11" Margin="0,0,0,4"/>
+                                            <TextBlock x:Name="HardwareRamText" Text="RAM: Detectando..." Foreground="White" FontSize="11" Margin="0,0,0,4"/>
+                                            <TextBlock x:Name="HardwareGpuText" Text="GPU: Detectando..." Foreground="White" FontSize="11" Margin="0,0,0,8"/>
+                                            <TextBlock x:Name="HardwareRecommendationText" Text="Recomendación: ..." Foreground="#88FFD700" FontSize="11" TextWrapping="Wrap" LineHeight="16"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Separator Background="#18FFFFFF" Margin="0,0,0,14"/>
+
+
+                                    <TextBlock Text="Dispositivo de entrada de audio" Foreground="#FFD700" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,8"/>
+                                    <ComboBox x:Name="ComboMicrophones" SelectionChanged="ComboMicrophones_SelectionChanged" Height="28" Margin="0,0,0,8"/>
+                                    <ui:Button Content="Probar micrófono" Click="TestSystem_Click" Appearance="Secondary" Height="26" Margin="0,0,0,6"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                        <TextBlock Text="Nivel Mic:" Foreground="#888" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <ProgressBar x:Name="MicLevelBar" Width="100" Height="4" Maximum="1" Background="#222" Foreground="#00FF00" BorderThickness="0"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="TestResultText" Text="" Foreground="#FFAAAA" FontSize="11" Margin="0,0,0,14" TextWrapping="Wrap"/>
+                                    <Separator Background="#18FFFFFF" Margin="0,0,0,14"/>
+
+                                    <CheckBox Content="Siempre al frente (Topmost)" Foreground="#DDD" IsChecked="True" Checked="Topmost_Checked" Unchecked="Topmost_Unchecked" Margin="0,0,0,10"/>
+                                    <Separator Background="#18FFFFFF" Margin="0,0,0,14"/>
+
+                                    <TextBlock Text="Opacidad de la ventana" Foreground="#888" FontSize="11" Margin="0,0,0,4"/>
+                                    <Slider x:Name="MainOpacitySlider" Minimum="0.05" Maximum="0.95" Value="0.45" SmallChange="0.05" LargeChange="0.1" Margin="0,0,0,14" ValueChanged="Slider_ValueChanged"/>
+                                    <Separator Background="#18FFFFFF" Margin="0,0,0,14"/>
+
+                                    <TextBlock Text="Modelos de Lenguaje (LM Studio)" Foreground="#FFD700" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,8"/>
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="LmStudioModelCombo" Height="28" Grid.Column="0" Margin="0,0,6,0" SelectionChanged="LmStudioModelCombo_SelectionChanged"/>
+                                        <ui:Button Grid.Column="1" Content="↻" Click="RefreshLmStudioModels_Click" Width="32" Height="32" Appearance="Secondary" ToolTip="Recargar modelos"/>
+                                    </Grid>
+                                    <TextBlock x:Name="LmStudioModelStatus" Text="" Foreground="#999" FontSize="10" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                                    <Separator Background="#18FFFFFF" Margin="0,0,0,14"/>
+
+                                    <ui:Button x:Name="BtnBrowserScanSettings" Click="BrowserScan_Click" Appearance="Secondary" Height="30" Margin="0,0,0,12">
+                                        <ui:Button.Content>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="🌐" FontSize="13" Margin="0,0,6,0"/>
+                                                <TextBlock Text="Escanear navegador" FontSize="11"/>
+                                            </StackPanel>
+                                        </ui:Button.Content>
+                                    </ui:Button>
+
+                                    <!-- WhisperModelCombo kept for compatibility -->
+                                    <ComboBox x:Name="WhisperModelCombo" Height="1" Margin="0" IsEnabled="False" Visibility="Collapsed" SelectionChanged="WhisperModelCombo_SelectionChanged"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Background / Audio playback element for session review (T3.3) -->
+                    <MediaElement x:Name="SessionAudioPlayback" LoadedBehavior="Manual"
+                                  UnloadedBehavior="Stop" Visibility="Collapsed"
+                                  MediaOpened="Playback_MediaOpened" MediaEnded="Playback_MediaEnded"/>
+                </Grid>
+
+            </Grid>
         </Grid>
     </Border>
 </Window>

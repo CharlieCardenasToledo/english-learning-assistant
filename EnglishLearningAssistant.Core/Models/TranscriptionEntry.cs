@@ -13,6 +13,8 @@ namespace WindowsLiveCaptionsReader.Models
         public float? ConfidenceScore { get; set; }
         public bool ContainsQuestion { get; set; }
         public string? AiResponse { get; set; }
+        public double? AudioStartTime { get; set; } // En segundos, relativo al inicio del audio/sesión
+        public double? AudioEndTime { get; set; }
     }
 
     public enum EntrySource { LiveCaption, Microphone, Browser, Recording }

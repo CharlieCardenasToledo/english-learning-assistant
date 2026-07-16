@@ -162,37 +162,153 @@ namespace WindowsLiveCaptionsReader.Services
             return result;
         }
 
-        public async Task<string> GenerateSummaryAsync(string fullHistory)
+        public enum SummaryTemplate
         {
-            var prompt = $@"
-Analyze the following English class transcript/conversation and provide a structured summary in MARKDOWN format.
-Focus on educational value for the student.
+            General,
+            Glossary,
+            GrammarHighlight,
+            StudyPlan,
+            Flashcards
+        }
 
-TRANSCRIPT:
+        public async Task<string> GenerateSummaryAsync(string fullHistory, SummaryTemplate template = SummaryTemplate.General)
+        {
+            string systemPrompt = "You are an English tutor and class summarizer. Produce structured Markdown files in Spanish.";
+            string prompt = "";
+
+            if (template == SummaryTemplate.General)
+            {
+                prompt = $@"
+Analiza el siguiente transcrito de clase de inglés y proporciona un resumen estructurado en formato MARKDOWN.
+El resumen DEBE estar en español, pero conserva los términos en inglés cuando sea apropiado.
+
+TRANSCRITO:
 {fullHistory}
 
-OUTPUT FORMAT:
-# Class Summary - {DateTime.Now:yyyy-MM-dd}
+FORMATO DE SALIDA:
+# 📝 Resumen General de la Clase - {DateTime.Now:yyyy-MM-dd}
 
-## 📌 Main Topics
-- (List main topics discussed)
+## 📌 Temas Principales Discutidos
+- (Enumera los temas discutidos en la clase y explica cada uno brevemente en español)
 
-## 🧠 Key Vocabulary & Phrases
-- (List new or important words used)
+## 🧠 Vocabulario Destacado
+- (Enumera palabras o frases importantes utilizadas con su traducción)
 
-## ✅ Action Items / Homework
-- (List any tasks mentioned, if none, say 'None detected')
+## ✅ Tareas / Pasos a Seguir
+- (Enumera tareas, deberes o acciones mencionadas. Si no hay ninguna, escribe 'Ninguna detectada')
 
-## 💡 Improvement Tips
-- (If the student spoke, suggest 1-2 grammatical corrections)
+## 💡 Consejos de Mejora
+- (Sugiere de 1 a 2 consejos gramaticales o correcciones basadas en lo dicho en el transcrito)
 ";
+            }
+            else if (template == SummaryTemplate.Glossary)
+            {
+                prompt = $@"
+Analiza el siguiente transcrito de clase de inglés. Extrae un glosario detallado de palabras, modismos y expresiones importantes, difíciles o nuevas que se hayan usado.
+Proporciona su traducción al español, tipo de palabra (sustantivo, verbo, adjetivo, etc.) y 2 oraciones de ejemplo en inglés para cada una basadas en el contexto o de uso general.
+El glosario debe estar en formato Markdown limpio en español.
+
+TRANSCRITO:
+{fullHistory}
+
+FORMATO DE SALIDA:
+# 📚 Glosario y Vocabulario de la Clase - {DateTime.Now:yyyy-MM-dd}
+
+## 📖 Palabras y Expresiones Clave
+
+### 1. [Palabra en Inglés] ([Tipo de palabra: Sustantivo, Verbo, etc.])
+- **Traducción:** [Traducción al Español]
+- **Definición breve:** [Breve explicación del significado en español]
+- **Ejemplos:**
+  - *Ejemplo 1:* [Oración en inglés que use la palabra]
+  - *Ejemplo 2:* [Otra oración en inglés de ejemplo]
+
+(Extrae entre 5 y 10 palabras/expresiones clave)
+";
+            }
+            else if (template == SummaryTemplate.GrammarHighlight)
+            {
+                prompt = $@"
+Analiza el siguiente transcrito de clase de inglés. Identifica de 2 a 3 puntos o estructuras gramaticales clave utilizadas (por ejemplo: Presente Perfecto, Voz Pasiva, Condicionales, Verbos Modales).
+Explica estas reglas claramente en español y muestra ejemplos de cómo se usaron en el transcrito o cómo deben usarse correctamente.
+Entrega el resultado en formato Markdown en español.
+
+TRANSCRITO:
+{fullHistory}
+
+FORMATO DE SALIDA:
+# ✍️ Puntos Gramaticales Clave - {DateTime.Now:yyyy-MM-dd}
+
+## 🧠 Gramática de la Sesión
+
+### 🔍 Estructura 1: [Nombre del Punto Gramatical]
+- **Explicación:** [Explicación breve de la regla gramatical en español]
+- **Fórmula/Patrón:** [Por ejemplo: Sujeto + have/has + participio pasado]
+- **Ejemplo del Transcrito:** [Cómo se usó en la clase]
+- **Ejemplo Adicional:** [Otro ejemplo correcto de uso]
+
+(Proporciona de 2 a 3 estructuras clave)
+";
+            }
+            else if (template == SummaryTemplate.StudyPlan)
+            {
+                prompt = $@"
+Analiza el siguiente transcrito de clase de inglés. Basado en las debilidades del estudiante, errores de gramática cometidos y vocabulario nuevo, genera un Plan de Estudio estructurado de 7 días.
+Proporciona 3 ejercicios prácticos y áreas de enfoque específicas para mejorar.
+Entrega el resultado en formato Markdown en español.
+
+TRANSCRITO:
+{fullHistory}
+
+FORMATO DE SALIDA:
+# 📅 Plan de Estudio Personalizado - {DateTime.Now:yyyy-MM-dd}
+
+## 🎯 Áreas de Enfoque Críticas
+1. [Área 1] - [Por qué es importante basándose en la clase]
+2. [Área 2] - [Por qué es importante basándose en la clase]
+
+## 🗓️ Calendario de 7 Días
+- **Día 1-2 (Teoría & Repaso):** [Actividad y temas a repasar]
+- **Día 3-4 (Escritura & Producción):** [Tema para escribir oraciones]
+- **Día 5-6 (Escucha & Práctica activa):** [Recomendación de escucha/audios]
+- **Día 7 (Auto-evaluación):** [Método de prueba rápido]
+
+## ✍️ Ejercicios Recomendados
+1. *Ejercicio 1:* [Descripción detallada del ejercicio]
+2. *Ejercicio 2:* [Descripción detallada del ejercicio]
+3. *Ejercicio 3:* [Descripción detallada del ejercicio]
+";
+            }
+            else if (template == SummaryTemplate.Flashcards)
+            {
+                prompt = $@"
+Analiza el siguiente transcrito de clase de inglés. Extrae de 5 a 10 flashcards de vocabulario o frases útiles en un formato adecuado para Anki (delimitado por punto y coma ';').
+El lado frontal debe tener la palabra/frase en inglés o una pregunta corta, y el lado posterior la traducción al español, contexto y pronunciación aproximada.
+Entrega el resultado en un bloque de código con formato CSV simple y una pequeña introducción.
+
+TRANSCRITO:
+{fullHistory}
+
+FORMATO DE SALIDA:
+# 🎴 Tarjetas de Memoria (Anki Flashcards) - {DateTime.Now:yyyy-MM-dd}
+
+Copia y pega el siguiente bloque en un archivo '.csv' para importarlo en Anki:
+
+```csv
+Front;Back
+[English Word / Phrase];[Spanish Translation] | Pronunciación: [Approx Pronunciation] | Contexto: [How it was used]
+```
+(Genera de 5 a 10 tarjetas)
+";
+            }
+
 
             var requestData = new
             {
                 model = _modelName,
                 messages = new[]
                 {
-                    new { role = "system", content = "You are an English class summarizer. Produce structured Markdown summaries." },
+                    new { role = "system", content = systemPrompt },
                     new { role = "user",   content = prompt }
                 },
                 stream = false,
@@ -201,6 +317,7 @@ OUTPUT FORMAT:
 
             return await SendNonStreamingRequestAsync(requestData);
         }
+
 
         public async Task<string> GenerateResponseToQuestionAsync(string question, string conversationContext, CancellationToken token = default)
         {

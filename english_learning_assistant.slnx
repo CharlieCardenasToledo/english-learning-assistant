@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/EnglishLearningAssistant.Tests/EnglishLearningAssistant.Tests.csproj" />
+  </Folder>
+  <Project Path="WindowsLiveCaptionsReader.csproj" />
+  <Project Path="EnglishLearningAssistant.Core/EnglishLearningAssistant.Core.csproj" />
+</Solution>
+

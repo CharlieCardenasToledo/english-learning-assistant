@@ -30,3 +30,5 @@ publish_release/
 CLAUDE.md
 .rtfm/
 image copy.png
+*.exe
+installer/*.exe

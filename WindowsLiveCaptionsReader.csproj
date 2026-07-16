@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -27,19 +27,36 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="EnglishLearningAssistant.Core\EnglishLearningAssistant.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Interop.UIAutomationClient" Version="10.19041.0" />
-    <PackageReference Include="NAudio" Version="2.2.1" />
-    <PackageReference Include="Selenium.WebDriver" Version="4.40.0" />
-    <!-- Whisper for high-quality local transcription -->
-    <PackageReference Include="Whisper.net" Version="1.5.0" />
-    <PackageReference Include="Whisper.net.Runtime" Version="1.5.0" />
-    <!-- Database support -->
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.11" />
+    <PackageReference Include="WPF-UI" Version="3.0.5" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="WPF-UI" Version="3.0.5" />
+  </ItemGroup>
+
+  <!-- Copiar appsettings.json al directorio de salida (T0.4) -->
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- Excluir carpeta de pruebas y del núcleo del proyecto principal -->
+  <ItemGroup>
+    <Compile Remove="tests\**" />
+    <EmbeddedResource Remove="tests\**" />
+    <None Remove="tests\**" />
+    <Page Remove="tests\**" />
+    
+    <Compile Remove="EnglishLearningAssistant.Core\**" />
+    <EmbeddedResource Remove="EnglishLearningAssistant.Core\**" />
+    <None Remove="EnglishLearningAssistant.Core\**" />
+    <Page Remove="EnglishLearningAssistant.Core\**" />
   </ItemGroup>
 
 </Project>

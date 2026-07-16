@@ -15,6 +15,7 @@ using System.Windows.Interop;
 using Microsoft.Win32;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Windows.Documents;
 using WindowsLiveCaptionsReader.Services;
 using WindowsLiveCaptionsReader.Models;
 
@@ -101,35 +102,39 @@ namespace WindowsLiveCaptionsReader
         private bool     _libreTranslateAvailable = false;
         private DateTime _libreTranslateLastCheck = DateTime.MinValue;
 
-        // ─── Health monitoring ────────────────────────────────────────────────
         private DispatcherTimer? _lmStudioHealthTimer;
-
-        // ─── History (UI) ─────────────────────────────────────────────────────
         public ObservableCollection<TranslationItem> History { get; set; }
+        private List<VocabularyItem> _allVocabWords = new();
+
+        private readonly DispatcherTimer _playbackTimer;
+        private bool _isSliderDragging = false;
+        private readonly EnglishLearningAssistant.Application.Transcription.FileTranscriptionService _fileTranscriptionService;
+        private QuestionJob? _lastProcessedQuestionJob;
+
 
         // ─── Constructor ──────────────────────────────────────────────────────
 
-        public MainWindow()
+        public MainWindow(
+            CaptionReader reader,
+            LmStudioService translator,
+            WhisperService whisperService,
+            AudioCaptureService micService,
+            SessionService sessionService,
+            QuestionDetectionService questionService,
+            VocabularyService vocabularyService,
+            EnglishLearningAssistant.Application.Transcription.FileTranscriptionService fileTranscriptionService)
         {
             InitializeComponent();
             History = new ObservableCollection<TranslationItem>();
-            _translator = new LmStudioService("llama-3.2-3b-instruct");
-            _whisperService = new WhisperService();
-            _micService = new AudioCaptureService(_whisperService);
+            _reader = reader;
+            _translator = translator;
+            _whisperService = whisperService;
+            _micService = micService;
+            _sessionService = sessionService;
+            _questionService = questionService;
+            _vocabularyService = vocabularyService;
+            _fileTranscriptionService = fileTranscriptionService;
 
-            try
-            {
-                _reader          = new CaptionReader();
-                _sessionService  = new SessionService();
-                _questionService = new QuestionDetectionService(_translator);
-                _vocabularyService = new VocabularyService(_translator);
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Error("Startup initialization failed", ex);
-                MessageBox.Show($"Error inicializando servicios: {ex.Message}", "Error de inicio",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
 
             if (_reader != null)
             {
@@ -146,8 +151,12 @@ namespace WindowsLiveCaptionsReader
             _settleTimer = new DispatcherTimer { Interval = SentenceSettleDelay };
             _settleTimer.Tick += SettleTimer_Tick;
 
+            _playbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+            _playbackTimer.Tick += PlaybackTimer_Tick;
+
             Loaded += MainWindow_Loaded;
         }
+
 
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
@@ -165,7 +174,11 @@ namespace WindowsLiveCaptionsReader
                 _translator.SetModel(_lmStudioModelName);
 
                 if (_sessionService   != null) await _sessionService.InitializeAsync();
-                if (_vocabularyService != null) await _vocabularyService.InitializeAsync();
+                if (_vocabularyService != null)
+                {
+                    await _vocabularyService.InitializeAsync();
+                    await LoadVocabulary();
+                }
 
                 await EnsureServicesAreRunning();
                 _reader?.Start();
@@ -176,12 +189,44 @@ namespace WindowsLiveCaptionsReader
                 // Start the question-generation worker (runs for the lifetime of the window)
                 _ = RunQuestionWorkerAsync(_pipelineShutdown.Token);
 
+                // Detect system hardware asynchronously (Fase 10)
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        var specs = Services.HardwareDetector.DetectHardware();
+                        var recommendation = Services.HardwareDetector.GetModelRecommendation(specs);
+                        
+                        Dispatcher.Invoke(() =>
+                        {
+                            HardwareCpuText.Text = $"CPU: {specs.CpuName} ({specs.CpuCores} núcleos)";
+                            HardwareRamText.Text = $"RAM: {specs.TotalRamGb} GB instalados";
+                            HardwareGpuText.Text = $"GPU: {specs.GpuName}";
+                            HardwareRecommendationText.Text = $"Disco C: {specs.FreeDiskGb} GB libres de {specs.TotalDiskGb} GB\n\n" + recommendation;
+
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Error("Hardware detection failed", ex);
+                    }
+                });
+
                 AppLogger.Info("Application started");
+
             }
             catch (Exception ex)
             {
                 AppLogger.Error("MainWindow_Loaded failed", ex);
-                MessageBox.Show($"Error durante la inicialización: {ex.Message}", "Error",
+                try
+                {
+                    var dbPath = EnglishLearningAssistant.Core.Models.AppConfiguration.Instance.Storage.DatabasePath;
+                    var detail = $"DatabasePath: {dbPath}\nMessage: {ex.Message}\nStack: {ex.StackTrace}\nInner: {ex.InnerException?.Message}\nInner Stack: {ex.InnerException?.StackTrace}";
+                    File.WriteAllText("startup_error.txt", detail);
+                }
+                catch { }
+                
+                MessageBox.Show($"Error durante la inicialización: {ex.Message}\n\nDetalle: {ex.InnerException?.Message}", "Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -343,8 +388,10 @@ namespace WindowsLiveCaptionsReader
 
                 if (result.Confidence >= 0.70f)
                 {
-                    // High confidence → enqueue FIFO; the worker answers questions in order.
-                    // Pause live translation right away so the LLM slot goes to the answer.
+                    // T7.2: Cancelar generación activa y vaciar cola
+                    _currentGenerationAbort?.Cancel();
+                    while (_questionChannel.Reader.TryRead(out _)) { }
+
                     _isGeneratingAnswer = true;
                     await _questionChannel.Writer.WriteAsync(new QuestionJob(sentence, result));
                     ShowQuestionIndicator(result);
@@ -372,10 +419,16 @@ namespace WindowsLiveCaptionsReader
                                     Type        = QuestionType.Indirect,
                                     DetectedVia = "L4-AI"
                                 };
+
+                                // T7.2: Cancelar generación activa y vaciar cola
+                                _currentGenerationAbort?.Cancel();
+                                while (_questionChannel.Reader.TryRead(out _)) { }
+
                                 if (_questionChannel.Writer.TryWrite(new QuestionJob(sentCapture, aiResult)))
                                     _isGeneratingAnswer = true;
                             }
                         }
+
                         catch (Exception ex)
                         {
                             AppLogger.Error("[L4-AI] Classification failed", ex);
@@ -449,7 +502,9 @@ namespace WindowsLiveCaptionsReader
         // explicit user abort (plus the internal QuestionGenerationTimeout).
         private async Task GenerateResponseAsync(QuestionJob job, CancellationToken token)
         {
+            _lastProcessedQuestionJob = job;
             string sentence = job.Sentence;
+
             var qResult = job.Detection;
             bool isForced = qResult.DetectedVia == "Manual";
             int queued = _questionChannel.Reader.Count;
@@ -499,14 +554,20 @@ namespace WindowsLiveCaptionsReader
             // [OPTIONS] streams first so option 1 is readable in seconds — what the student
             // needs to SAY. Context analysis is nice-to-have and comes last. Short limits +
             // max_tokens cap keep total generation under ~10s instead of 20s+.
+            // T7.3: Opciones diferenciadas por longitud y formalidad
             string systemPrompt =
                 $"You are an English tutor helping a {_englishLevel}-level student named {_userName}. " +
-                "The teacher just asked the student a question. Answer FAST and SHORT. " +
+                "The teacher just asked the student a question. " +
+                "Provide 3 response options of different lengths and levels of formality:\n" +
+                "Option 1: Brief (Very short, direct, max 5 words)\n" +
+                "Option 2: Natural (Standard conversational response, max 12 words)\n" +
+                "Option 3: Detailed (More formal, expanded explanation, max 25 words)\n" +
                 "Reply using EXACTLY this template, keeping the bracketed section headers:\n" +
-                "[OPTIONS]\n1. (English response, max 12 words)\n2. (English response, max 12 words)\n3. (English response, max 12 words)\n" +
+                "[OPTIONS]\n1. (Brief option)\n2. (Natural option)\n3. (Detailed option)\n" +
                 "[TRANSLATIONS]\n1. (Spanish translation of option 1)\n2. (Spanish translation of option 2)\n3. (Spanish translation of option 3)\n" +
-                "[CONTEXT]\n(ONE short sentence in Spanish: why the teacher asks this)\n" +
-                "The 3 options MUST be in English only. Be brief. Output nothing outside the template.";
+                "[CONTEXT]\n(ONE short sentence in Spanish explaining the grammatical or situational context of the question)\n" +
+                "The 3 options MUST be in English only. Output nothing outside the template.";
+
 
             try
             {
@@ -558,9 +619,10 @@ namespace WindowsLiveCaptionsReader
                         if (fEn.Length > 0  && _currentEnText  != null) _currentEnText.Text  = fEn;
                         if (fEs.Length > 0  && _currentEsText  != null) _currentEsText.Text  = fEs;
                     }
-                    ResponseStatus.Text           = DateTime.Now.ToString("HH:mm");
+                    ResponseStatus.Text           = $"{DateTime.Now:HH:mm} ({reasoningSw.Elapsed.TotalSeconds:F1}s)";
                     ResponseLoadingBar.Visibility = Visibility.Collapsed;
                 });
+
             }
             catch (OperationCanceledException) when (!token.IsCancellationRequested)
             {
@@ -670,8 +732,13 @@ namespace WindowsLiveCaptionsReader
             var forced = new QuestionDetectionResult
                 { IsQuestion = true, Confidence = 1.0f, Type = QuestionType.Direct, DetectedVia = "Manual" };
             ShowQuestionIndicator(forced);
+            // T7.2: Cancelar generación activa y vaciar cola
+            _currentGenerationAbort?.Cancel();
+            while (_questionChannel.Reader.TryRead(out _)) { }
+
             _isGeneratingAnswer = true;   // manual questions join the same FIFO queue
             await _questionChannel.Writer.WriteAsync(new QuestionJob(question, forced));
+
         }
 
         private void ShowQuestionIndicator(QuestionDetectionResult result) =>
@@ -719,11 +786,14 @@ namespace WindowsLiveCaptionsReader
 
                 if (_currentSession != null)
                 {
+                    var elapsed = DateTime.Now - _currentSession.StartTime;
                     var entry = new TranscriptionEntry
                     {
                         SessionId = _currentSession.Id, OriginalText = textToTranslate,
                         TranslatedText = result, Timestamp = DateTime.Now,
-                        Source = EntrySource.LiveCaption, ConfidenceScore = 1.0f
+                        Source = EntrySource.LiveCaption, ConfidenceScore = 1.0f,
+                        AudioStartTime = Math.Max(0, elapsed.TotalSeconds - 4),
+                        AudioEndTime = elapsed.TotalSeconds
                     };
                     _currentSession.Entries.Add(entry);
                     _ = _sessionService?.SaveEntryAsync(entry);
@@ -792,11 +862,14 @@ namespace WindowsLiveCaptionsReader
 
                 if (_currentSession != null)
                 {
+                    var elapsed = DateTime.Now - _currentSession.StartTime;
                     var entry = new TranscriptionEntry
                     {
                         SessionId = _currentSession.Id, OriginalText = sentence,
                         TranslatedText = result, Timestamp = DateTime.Now,
-                        Source = EntrySource.LiveCaption, ConfidenceScore = 1.0f
+                        Source = EntrySource.LiveCaption, ConfidenceScore = 1.0f,
+                        AudioStartTime = Math.Max(0, elapsed.TotalSeconds - 4),
+                        AudioEndTime = elapsed.TotalSeconds
                     };
                     _currentSession.Entries.Add(entry);
                     _ = _sessionService?.SaveEntryAsync(entry);
@@ -911,8 +984,8 @@ namespace WindowsLiveCaptionsReader
                     SuggestionsOverlay.Visibility = Visibility.Collapsed;
                 else if (SettingsPanel.Visibility == Visibility.Visible)
                     SettingsPanel.Visibility = Visibility.Collapsed;
-                else if (SessionPanel.Visibility == Visibility.Visible)
-                    SessionPanel.Visibility = Visibility.Collapsed;
+                else if (HistoryPanel.Visibility == Visibility.Visible)
+                    SwitchToPanel(LiveViewPanel, BtnNavLive);
             }
         }
 
@@ -927,7 +1000,28 @@ namespace WindowsLiveCaptionsReader
             t.Start();
         }
 
+        // T7.4: Regenerar respuestas sugeridas
+
+        private async void RegenerateAnswers_Click(object sender, RoutedEventArgs e)
+        {
+            if (_lastProcessedQuestionJob == null) return;
+
+            _currentGenerationAbort?.Cancel();
+            using var abort = CancellationTokenSource.CreateLinkedTokenSource(_pipelineShutdown.Token);
+            _currentGenerationAbort = abort;
+
+            try
+            {
+                await GenerateResponseAsync(_lastProcessedQuestionJob, abort.Token);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("RegenerateAnswers_Click failed", ex);
+            }
+        }
+
         private void CopyQuestion_Click(object sender, RoutedEventArgs e)
+
         {
             if (!string.IsNullOrWhiteSpace(QuestionText.Text)
                 && QuestionText.Text != "Esperando pregunta del profesor...")
@@ -1050,23 +1144,13 @@ namespace WindowsLiveCaptionsReader
         {
             try
             {
-                if (SettingsPanel.Visibility == Visibility.Visible)
-                {
-                    SettingsPanel.Visibility = Visibility.Collapsed;
-                    SaveSettings();
-                }
-                else
-                {
-                    UserNameBox.Text = _userName;
-                    foreach (ComboBoxItem item in LevelCombo.Items)
-                        if (item.Content.ToString() == _englishLevel) { LevelCombo.SelectedItem = item; break; }
-                    await PopulateLmStudioModelsAsync();
-                    SettingsPanel.Visibility = Visibility.Visible;
-                    LoadMicrophones();
-                }
+                SwitchToPanel(SettingsPanel, BtnNavSettings);
+                await PopulateLmStudioModelsAsync();
+                LoadMicrophones();
             }
             catch (Exception ex) { AppLogger.Error("Settings_Click", ex); }
         }
+
 
         private async Task PopulateLmStudioModelsAsync()
         {
@@ -1116,9 +1200,10 @@ namespace WindowsLiveCaptionsReader
 
         private void CloseSettings_Click(object sender, RoutedEventArgs e)
         {
-            SettingsPanel.Visibility = Visibility.Collapsed;
+            SwitchToPanel(LiveViewPanel, BtnNavLive);
             SaveSettings();
         }
+
 
         private void UserNameBox_TextChanged(object sender, TextChangedEventArgs e)
         {
@@ -1399,18 +1484,62 @@ namespace WindowsLiveCaptionsReader
 
         // ─── Summary ──────────────────────────────────────────────────────────
 
-        private async void GenerateSummary_Click(object sender, RoutedEventArgs e)
+        private void GenerateSummary_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button btn) return;
+
+            var menu = new ContextMenu();
+            
+            var item1 = new MenuItem { Header = "📝 Resumen General de Clase" };
+            item1.Click += async (s, ev) => await ProcessSummaryGeneration(LmStudioService.SummaryTemplate.General);
+            menu.Items.Add(item1);
+
+            var item2 = new MenuItem { Header = "📚 Glosario y Vocabulario" };
+            item2.Click += async (s, ev) => await ProcessSummaryGeneration(LmStudioService.SummaryTemplate.Glossary);
+            menu.Items.Add(item2);
+
+            var item3 = new MenuItem { Header = "✍️ Puntos Gramaticales Clave" };
+            item3.Click += async (s, ev) => await ProcessSummaryGeneration(LmStudioService.SummaryTemplate.GrammarHighlight);
+            menu.Items.Add(item3);
+
+            var item4 = new MenuItem { Header = "📅 Plan de Estudio Personalizado" };
+            item4.Click += async (s, ev) => await ProcessSummaryGeneration(LmStudioService.SummaryTemplate.StudyPlan);
+            menu.Items.Add(item4);
+
+            var item5 = new MenuItem { Header = "🎴 Tarjetas de Anki (Flashcards)" };
+            item5.Click += async (s, ev) => await ProcessSummaryGeneration(LmStudioService.SummaryTemplate.Flashcards);
+            menu.Items.Add(item5);
+
+            menu.PlacementTarget = btn;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
+        }
+
+        private async Task ProcessSummaryGeneration(LmStudioService.SummaryTemplate template)
         {
             try
             {
                 string full = TranscriptionText.Text.Trim();
-                if (string.IsNullOrWhiteSpace(full)) { StatusText.Text = "Sin transcripción para resumir."; return; }
+                if (string.IsNullOrWhiteSpace(full))
+                {
+                    StatusText.Text = "Sin transcripción para resumir.";
+                    return;
+                }
 
                 StatusText.Text = "Generando resumen...";
-                string summary  = await _translator.GenerateSummaryAsync(full);
-                string filename = $"Resumen_Clase_{DateTime.Now:yyyyMMdd_HHmm}.md";
+                string summary = await _translator.GenerateSummaryAsync(full, template);
+                
+                string templateSuffix = template == LmStudioService.SummaryTemplate.Glossary ? "Glosario"
+                                      : template == LmStudioService.SummaryTemplate.GrammarHighlight ? "Gramatica"
+                                      : template == LmStudioService.SummaryTemplate.StudyPlan ? "PlanEstudio"
+                                      : template == LmStudioService.SummaryTemplate.Flashcards ? "Flashcards"
+                                      : "Resumen";
+
+                string filename = $"{templateSuffix}_Clase_{DateTime.Now:yyyyMMdd_HHmm}.md";
                 File.WriteAllText(filename, summary);
                 StatusText.Text = "Resumen guardado";
+
+
                 try
                 {
                     System.Diagnostics.Process.Start(
@@ -1421,10 +1550,11 @@ namespace WindowsLiveCaptionsReader
             catch (Exception ex)
             {
                 StatusText.Text = "Error al generar resumen";
-                AppLogger.Error("GenerateSummary_Click", ex);
+                AppLogger.Error("ProcessSummaryGeneration failed", ex);
                 MessageBox.Show(ex.Message, "Error al generar resumen", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
+
 
         // ─── Sessions ─────────────────────────────────────────────────────────
 
@@ -1473,18 +1603,12 @@ namespace WindowsLiveCaptionsReader
         {
             try
             {
-                if (SessionPanel.Visibility == Visibility.Visible)
-                    SessionPanel.Visibility = Visibility.Collapsed;
-                else
-                {
-                    SettingsPanel.Visibility = Visibility.Collapsed;
-                    SuggestionsOverlay.Visibility = Visibility.Collapsed;
-                    SessionPanel.Visibility = Visibility.Visible;
-                    await RefreshSessionsList();
-                }
+                SwitchToPanel(HistoryPanel, BtnNavHistory);
+                await RefreshSessionsList();
             }
             catch (Exception ex) { AppLogger.Error("Sessions_Click", ex); }
         }
+
 
         private async Task RefreshSessionsList(string query = "")
         {
@@ -1504,13 +1628,13 @@ namespace WindowsLiveCaptionsReader
                     await _sessionService!.SaveSessionAsync(_currentSession);
 
                 await CreateNewSessionAsync();
-                SessionPanel.Visibility = Visibility.Collapsed;
+                SwitchToPanel(LiveViewPanel, BtnNavLive);
             }
             catch (Exception ex) { AppLogger.Error("NewSession_Click", ex); }
         }
 
         private void CloseSessions_Click(object sender, RoutedEventArgs e) =>
-            SessionPanel.Visibility = Visibility.Collapsed;
+            SwitchToPanel(LiveViewPanel, BtnNavLive);
 
         private async void DeleteSession_Click(object sender, RoutedEventArgs e)
         {
@@ -1552,7 +1676,34 @@ namespace WindowsLiveCaptionsReader
                 string committed = string.Join("\n", entries.Select(en => en.OriginalText));
                 _captions.LoadHistory(committed);
 
-                TranscriptionText.Text = committed;
+                // T3.4: Convertir segmentos en links interactivos de reproducción
+                TranscriptionText.Text = "";
+                TranscriptionText.Inlines.Clear();
+                foreach (var entry in entries)
+                {
+                    var run = new Run(entry.OriginalText + " ");
+                    var link = new Hyperlink(run)
+                    {
+                        TextDecorations = null,
+                        Foreground = Brushes.White,
+                        Cursor = Cursors.Hand
+                    };
+
+                    var startTime = entry.AudioStartTime;
+                    link.Click += (s, ev) =>
+                    {
+                        if (startTime.HasValue && SessionAudioPlayback.Source != null)
+                        {
+                            SessionAudioPlayback.Position = TimeSpan.FromSeconds(startTime.Value);
+                            SessionAudioPlayback.Play();
+                            BtnPlayerPlay.Visibility = Visibility.Collapsed;
+                            BtnPlayerPause.Visibility = Visibility.Visible;
+                        }
+                    };
+
+                    TranscriptionText.Inlines.Add(link);
+                }
+
                 TranslationText.Text   = string.Join("\n\n",
                     entries.Where(en => !string.IsNullOrWhiteSpace(en.TranslatedText))
                            .Select(en => en.TranslatedText));
@@ -1560,10 +1711,195 @@ namespace WindowsLiveCaptionsReader
                     ? entries.Last().Timestamp.ToString("HH:mm") : "";
 
                 History.Clear();
-                SessionPanel.Visibility = Visibility.Collapsed;
+                SwitchToPanel(LiveViewPanel, BtnNavLive);
+
+                // T3.3: Cargar grabación de audio si existe
+                bool hasAudio = false;
+                if (!string.IsNullOrEmpty(loaded.RecordingPath) && File.Exists(loaded.RecordingPath))
+                {
+                    hasAudio = true;
+                    SessionAudioPlayback.Source = new Uri(loaded.RecordingPath);
+                }
+                else
+                {
+                    // Fallback: buscar archivos en la carpeta de grabaciones que comiencen con la fecha de la sesión
+                    var recDir = EnglishLearningAssistant.Core.Models.AppConfiguration.Instance.Storage.AudioRecordingsPath!;
+                    if (Directory.Exists(recDir))
+                    {
+                        var searchPattern = $"session_{loaded.StartTime:yyyyMMdd}_*.wav";
+                        var files = Directory.GetFiles(recDir, searchPattern);
+                        if (files.Length > 0)
+                        {
+                            hasAudio = true;
+                            loaded.RecordingPath = files[0];
+                            SessionAudioPlayback.Source = new Uri(files[0]);
+                        }
+                    }
+                }
+
+                if (hasAudio)
+                {
+                    LiveActionPanel.Visibility = Visibility.Collapsed;
+                    ReviewPlayerPanel.Visibility = Visibility.Visible;
+                    PlayerTimeText.Text = "00:00 / 00:00";
+                    PlayerSlider.Value = 0;
+                    _playbackTimer.Start();
+                }
+                else
+                {
+                    LiveActionPanel.Visibility = Visibility.Visible;
+                    ReviewPlayerPanel.Visibility = Visibility.Collapsed;
+                    SessionAudioPlayback.Source = null;
+                }
             }
             catch (Exception ex) { AppLogger.Error("SessionsList_MouseDoubleClick", ex); }
         }
+
+        // ─── Audio playback control for session review (T3.3) ──────────────────
+
+        private void PlaybackTimer_Tick(object? sender, EventArgs e)
+        {
+            if (_isSliderDragging || SessionAudioPlayback.NaturalDuration.HasTimeSpan == false) return;
+
+            double current = SessionAudioPlayback.Position.TotalSeconds;
+            double total = SessionAudioPlayback.NaturalDuration.TimeSpan.TotalSeconds;
+
+            PlayerSlider.Value = total > 0 ? (current / total) : 0;
+            PlayerTimeText.Text = $"{SessionAudioPlayback.Position:mm\\:ss} / {SessionAudioPlayback.NaturalDuration.TimeSpan:mm\\:ss}";
+        }
+
+        private void Playback_MediaOpened(object sender, RoutedEventArgs e)
+        {
+            if (SessionAudioPlayback.NaturalDuration.HasTimeSpan)
+            {
+                var total = SessionAudioPlayback.NaturalDuration.TimeSpan;
+                PlayerTimeText.Text = $"00:00 / {total:mm\\:ss}";
+            }
+        }
+
+        private void Playback_MediaEnded(object sender, RoutedEventArgs e)
+        {
+            SessionAudioPlayback.Stop();
+            BtnPlayerPlay.Visibility = Visibility.Visible;
+            BtnPlayerPause.Visibility = Visibility.Collapsed;
+            PlayerSlider.Value = 0;
+            PlayerTimeText.Text = $"00:00 / {(SessionAudioPlayback.NaturalDuration.HasTimeSpan ? SessionAudioPlayback.NaturalDuration.TimeSpan.ToString("mm\\:ss") : "00:00")}";
+        }
+
+        private void PlayerPlay_Click(object sender, RoutedEventArgs e)
+        {
+            SessionAudioPlayback.Play();
+            BtnPlayerPlay.Visibility = Visibility.Collapsed;
+            BtnPlayerPause.Visibility = Visibility.Visible;
+        }
+
+        private void PlayerPause_Click(object sender, RoutedEventArgs e)
+        {
+            SessionAudioPlayback.Pause();
+            BtnPlayerPlay.Visibility = Visibility.Visible;
+            BtnPlayerPause.Visibility = Visibility.Collapsed;
+        }
+
+        private void PlayerSlider_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _isSliderDragging = true;
+        }
+
+        private void PlayerSlider_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            _isSliderDragging = false;
+            if (SessionAudioPlayback.NaturalDuration.HasTimeSpan)
+            {
+                double total = SessionAudioPlayback.NaturalDuration.TimeSpan.TotalSeconds;
+                SessionAudioPlayback.Position = TimeSpan.FromSeconds(PlayerSlider.Value * total);
+            }
+        }
+
+        private void PlayerSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isSliderDragging && SessionAudioPlayback.NaturalDuration.HasTimeSpan)
+            {
+                double total = SessionAudioPlayback.NaturalDuration.TimeSpan.TotalSeconds;
+                var current = TimeSpan.FromSeconds(e.NewValue * total);
+                PlayerTimeText.Text = $"{current:mm\\:ss} / {SessionAudioPlayback.NaturalDuration.TimeSpan:mm\\:ss}";
+            }
+        }
+
+        private void ExitReview_Click(object sender, RoutedEventArgs e)
+        {
+            SessionAudioPlayback.Stop();
+            _playbackTimer.Stop();
+            SessionAudioPlayback.Source = null;
+
+            LiveActionPanel.Visibility = Visibility.Visible;
+            ReviewPlayerPanel.Visibility = Visibility.Collapsed;
+        }
+
+        private async void ImportFile_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = "Seleccionar Archivo de Audio o Video",
+                Filter = "Archivos Multimedia (*.mp4;*.mkv;*.avi;*.mp3;*.wav;*.m4a)|*.mp4;*.mkv;*.avi;*.mp3;*.wav;*.m4a|Videos (*.mp4;*.mkv;*.avi)|*.mp4;*.mkv;*.avi|Audio (*.mp3;*.wav;*.m4a)|*.mp3;*.wav;*.m4a"
+            };
+
+            if (dialog.ShowDialog() != true) return;
+
+            string filePath = dialog.FileName;
+            ImportProgressOverlay.Visibility = Visibility.Visible;
+            ImportProgressBar.Value = 0;
+            ImportPercentText.Text = "0%";
+            ImportStatusText.Text = "Iniciando importación...";
+
+            var progress = new Progress<double>(pct =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    ImportProgressBar.Value = pct * 100;
+                    ImportPercentText.Text = $"{pct:P0}";
+                    if (pct < 0.15) ImportStatusText.Text = "🎬 Extrayendo y remuestreando audio...";
+                    else if (pct < 0.25) ImportStatusText.Text = "⚙️ Inicializando transcriptor Whisper...";
+                    else if (pct < 0.95) ImportStatusText.Text = "✍️ Transcribiendo y traduciendo segmentos...";
+                    else ImportStatusText.Text = "💾 Completando y guardando sesión...";
+                });
+            });
+
+            try
+            {
+                var session = await Task.Run(async () => 
+                    await _fileTranscriptionService.ImportFileAsync(filePath, progress)
+                );
+
+                MessageBox.Show($"¡Importación exitosa!\nSe ha creado la sesión: \"{session.Title}\"", "Importar Archivo", 
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+
+                // Recargar listado de sesiones en UI
+                await RefreshSessionsList();
+
+                // Cargar automáticamente la nueva sesión para su revisión
+                SessionsList.SelectedItem = SessionsList.Items.Cast<Session>()
+                    .FirstOrDefault(s => s.Id == session.Id);
+                
+                // Simular doble clic para cargarla
+                SessionsList_MouseDoubleClick(this, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) 
+                { 
+                    RoutedEvent = Control.MouseDoubleClickEvent 
+                });
+
+            }
+            catch (Exception ex)
+            {
+                EnglishLearningAssistant.Core.AppLogger.Error("ImportFile_Click failed", ex);
+                MessageBox.Show($"Ocurrió un error al importar el archivo:\n{ex.Message}", "Error de Importación", 
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                ImportProgressOverlay.Visibility = Visibility.Collapsed;
+            }
+        }
+
+
 
         private void SearchSessionsBox_GotFocus(object sender, RoutedEventArgs e)
         {
@@ -1603,41 +1939,103 @@ namespace WindowsLiveCaptionsReader
                 {
                     if (_currentSession == null)
                     {
-                        MessageBox.Show("Selecciona una sesión para exportar.", "Export",
+                        MessageBox.Show("Selecciona una sesión para exportar.", "Exportar Sesión",
                             MessageBoxButton.OK, MessageBoxImage.Warning);
                         return;
                     }
-                    if (MessageBox.Show("No hay sesión seleccionada. ¿Exportar la sesión activa?", "Export",
+                    if (MessageBox.Show("No hay sesión seleccionada. ¿Exportar la sesión activa?", "Exportar Sesión",
                             MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
                     sessionToExport = _currentSession;
                 }
 
+                // Cargar todas las entradas asociadas
+                var fullSession = await _sessionService!.LoadSessionAsync(sessionToExport.Id);
+
+                if (fullSession == null) return;
+
                 var dialog = new SaveFileDialog
                 {
-                    Title  = "Exportar sesión a Markdown",
-                    Filter = "Markdown Files (*.md)|*.md|All Files (*.*)|*.*",
-                    FileName = $"Session_{sessionToExport.StartTime:yyyyMMdd_HHmm}.md"
+                    Title  = "Exportar Sesión",
+                    Filter = "Markdown (*.md)|*.md|Texto Plano (*.txt)|*.txt|Subtítulos SRT (*.srt)|*.srt|Subtítulos VTT (*.vtt)|*.vtt|CSV de Anki (*.csv)|*.csv|JSON (*.json)|*.json",
+                    FileName = $"Session_{fullSession.StartTime:yyyyMMdd_HHmm}.md"
                 };
 
                 if (dialog.ShowDialog() != true) return;
 
-                string content = await _sessionService!.ExportToMarkdownAsync(sessionToExport.Id);
-                await File.WriteAllTextAsync(dialog.FileName, content);
-                MessageBox.Show("Exportación exitosa.", "Export", MessageBoxButton.OK, MessageBoxImage.Information);
+                string filePath = dialog.FileName;
+                string ext = Path.GetExtension(filePath).ToLower();
+                string content = "";
+
+                if (ext == ".md")
+                {
+                    content = await _sessionService.ExportToMarkdownAsync(fullSession.Id);
+                }
+                else if (ext == ".txt")
+                {
+                    var lines = new System.Collections.Generic.List<string>
+                    {
+                        $"=== SESIÓN: {fullSession.Title} ===",
+                        $"Inicio: {fullSession.StartTime}",
+                        $"Fin: {fullSession.EndTime}",
+                        $"Resumen: {fullSession.Summary}",
+                        ""
+                    };
+                    foreach (var entry in fullSession.Entries.OrderBy(en => en.Timestamp))
+                    {
+                        lines.Add($"[{entry.Timestamp:HH:mm:ss}]");
+                        lines.Add($"  EN: {entry.OriginalText}");
+                        if (!string.IsNullOrWhiteSpace(entry.TranslatedText))
+                        {
+                            lines.Add($"  ES: {entry.TranslatedText}");
+                        }
+                        lines.Add("");
+                    }
+                    content = string.Join("\n", lines);
+                }
+                else if (ext == ".srt")
+                {
+                    content = await _sessionService.ExportToSrtAsync(fullSession.Id);
+                }
+                else if (ext == ".vtt")
+                {
+                    content = await _sessionService.ExportToVttAsync(fullSession.Id);
+                }
+                else if (ext == ".csv")
+                {
+                    // T9.3: CSV para Anki: Front;Back
+                    var lines = new System.Collections.Generic.List<string> { "Front;Back" };
+                    foreach (var entry in fullSession.Entries.OrderBy(en => en.Timestamp))
+                    {
+                        if (string.IsNullOrWhiteSpace(entry.OriginalText)) continue;
+                        string front = entry.OriginalText.Replace("\"", "\"\"");
+                        string back = entry.TranslatedText.Replace("\"", "\"\"");
+                        lines.Add($"\"{front}\";\"{back}\"");
+                    }
+                    content = string.Join("\n", lines);
+                }
+                else if (ext == ".json")
+                {
+                    var options = new JsonSerializerOptions { WriteIndented = true };
+                    content = JsonSerializer.Serialize(fullSession, options);
+                }
+
+                await File.WriteAllTextAsync(filePath, content);
+                MessageBox.Show("Exportación completada con éxito.", "Exportar Sesión", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
                 AppLogger.Error("ExportSession_Click", ex);
-                MessageBox.Show($"Error al exportar: {ex.Message}", "Export", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"Error al exportar: {ex.Message}", "Exportar Sesión", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
-        private void Vocabulary_Click(object sender, RoutedEventArgs e)
+        private async void Vocabulary_Click(object sender, RoutedEventArgs e)
         {
-            var vocabWin = new VocabularyWindow(_vocabularyService);
-            vocabWin.Topmost = true;
-            vocabWin.ShowDialog();
+            SwitchToPanel(VocabularyPanel, BtnNavVocab);
+            await LoadVocabulary();
         }
+
+
 
         // ─── DWM blur-behind ──────────────────────────────────────────────────
 
@@ -1663,6 +2061,219 @@ namespace WindowsLiveCaptionsReader
             }
             catch { }
         }
+
+        // ======================================================================
+        // SIDEBAR NAVIGATION & THEME INTEGRATION (Fase 5 - T5.2, T5.5)
+        // ======================================================================
+
+        private void SwitchToPanel(FrameworkElement targetPanel, Button activeNavBtn)
+        {
+            // Ocultar todos los paneles principales
+            LiveViewPanel.Visibility = Visibility.Collapsed;
+            HistoryPanel.Visibility = Visibility.Collapsed;
+            VocabularyPanel.Visibility = Visibility.Collapsed;
+            SettingsPanel.Visibility = Visibility.Collapsed;
+
+            // Mostrar el seleccionado
+            targetPanel.Visibility = Visibility.Visible;
+
+            // Actualizar estilos de botones
+            BtnNavLive.Style = (Style)FindResource("SidebarBtn");
+            BtnNavHistory.Style = (Style)FindResource("SidebarBtn");
+            BtnNavVocab.Style = (Style)FindResource("SidebarBtn");
+            BtnNavSettings.Style = (Style)FindResource("SidebarBtn");
+
+            activeNavBtn.Style = (Style)FindResource("SidebarBtnActive");
+        }
+
+        private async void Nav_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button btn) return;
+
+            if (btn == BtnNavLive)
+            {
+                SwitchToPanel(LiveViewPanel, BtnNavLive);
+            }
+            else if (btn == BtnNavHistory)
+            {
+                SwitchToPanel(HistoryPanel, BtnNavHistory);
+                await RefreshSessionsList();
+            }
+            else if (btn == BtnNavVocab)
+            {
+                SwitchToPanel(VocabularyPanel, BtnNavVocab);
+                await LoadVocabulary();
+            }
+            else if (btn == BtnNavSettings)
+            {
+                SwitchToPanel(SettingsPanel, BtnNavSettings);
+                await PopulateLmStudioModelsAsync();
+                LoadMicrophones();
+            }
+        }
+
+        private void ThemeRadio_Checked(object sender, RoutedEventArgs e)
+        {
+            if (ThemeDarkRadio == null || ThemeLightRadio == null) return;
+            
+            if (ThemeDarkRadio.IsChecked == true)
+            {
+                Wpf.Ui.Appearance.ApplicationThemeManager.Apply(Wpf.Ui.Appearance.ApplicationTheme.Dark);
+            }
+            else
+            {
+                Wpf.Ui.Appearance.ApplicationThemeManager.Apply(Wpf.Ui.Appearance.ApplicationTheme.Light);
+            }
+        }
+
+        // ======================================================================
+        // INTEGRATED VOCABULARY PANEL (Fase 5 - T5.3)
+        // ======================================================================
+
+        private async Task LoadVocabulary()
+        {
+            try
+            {
+                _allVocabWords = await _vocabularyService.GetAllVocabularyAsync();
+                FilterVocabList(VocabSearchBox.Text);
+                SidebarCefrText.Text = $"Nivel: {EnglishLearningAssistant.Core.Models.AppConfiguration.Instance.CefrLevel}";
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("LoadVocabulary failed", ex);
+            }
+        }
+
+        private void FilterVocabList(string query)
+        {
+            if (_allVocabWords == null) return;
+
+            if (string.IsNullOrWhiteSpace(query) || query == "Buscar...")
+            {
+                VocabGrid.ItemsSource = _allVocabWords;
+            }
+            else
+            {
+                var filtered = _allVocabWords.Where(w =>
+                    w.Word.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    w.SpanishTranslation.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    (w.Definition != null && w.Definition.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList();
+                VocabGrid.ItemsSource = filtered;
+            }
+        }
+
+        private void VocabSearchBox_KeyUp(object sender, KeyEventArgs e)
+        {
+            FilterVocabList(VocabSearchBox.Text);
+        }
+
+        private void VocabSearchBox_GotFocus(object sender, RoutedEventArgs e)
+        {
+            if (VocabSearchBox.Text == "Buscar...")
+            {
+                VocabSearchBox.Text = "";
+                VocabSearchBox.Foreground = Brushes.White;
+            }
+        }
+
+        private void VocabSearchBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(VocabSearchBox.Text))
+            {
+                VocabSearchBox.Text = "Buscar...";
+                VocabSearchBox.Foreground = Brushes.Gray;
+            }
+        }
+
+        private void AddWord_Click(object sender, RoutedEventArgs e)
+        {
+            AddWordForm.Visibility = Visibility.Visible;
+            NewWordBox.Clear();
+            NewTransBox.Clear();
+            NewDefBox.Clear();
+            NewWordBox.Focus();
+        }
+
+        private void CancelAddWord_Click(object sender, RoutedEventArgs e)
+        {
+            AddWordForm.Visibility = Visibility.Collapsed;
+        }
+
+        private async void SaveNewWord_Click(object sender, RoutedEventArgs e)
+        {
+            string word = NewWordBox.Text.Trim();
+            string trans = NewTransBox.Text.Trim();
+            string def   = NewDefBox.Text.Trim();
+
+            if (string.IsNullOrEmpty(word) || string.IsNullOrEmpty(trans))
+            {
+                MessageBox.Show("La palabra y su traducción son campos requeridos.", "Agregar palabra", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                await _vocabularyService.AddOrUpdateWordAsync(word, def, trans);
+                AddWordForm.Visibility = Visibility.Collapsed;
+                await LoadVocabulary();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error al guardar palabra: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private async void ExtractFromText_Click(object sender, RoutedEventArgs e)
+        {
+            string text = Clipboard.GetText();
+            if (string.IsNullOrWhiteSpace(text) || text.Length < 20)
+            {
+                MessageBox.Show("Copia algún texto (mín. 20 caracteres) en inglés al portapapeles antes de hacer clic.", "Analizar portapapeles", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            try
+            {
+                var suggestions = await _vocabularyService.ExtractPotentialVocabularyAsync(text);
+                if (suggestions.Count > 0)
+                {
+                    string msg = "Palabras y definiciones sugeridas:\n\n" + string.Join("\n", suggestions) + "\n\n¿Deseas agregarlas a tu libro de vocabulario?";
+                    if (MessageBox.Show(msg, "Vocabulario Sugerido", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                    {
+                        foreach (var s in suggestions)
+                        {
+                            var parts = s.Split('|');
+                            if (parts.Length >= 3)
+                            {
+                                await _vocabularyService.AddOrUpdateWordAsync(parts[0], parts[1], parts[2], text[..Math.Min(text.Length, 60)] + "...");
+                            }
+                        }
+                        await LoadVocabulary();
+                    }
+                }
+                else
+                {
+                    MessageBox.Show("No se detectó vocabulario nuevo para tu nivel en el portapapeles.", "Análisis completado", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error al analizar texto: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private async void DeleteWord_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is int id)
+            {
+                if (MessageBox.Show("¿Estás seguro de que deseas eliminar esta palabra?", "Eliminar Palabra", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                {
+                    await _vocabularyService.DeleteWordAsync(id);
+                    await LoadVocabulary();
+                }
+            }
+        }
+
     }
 
     public record QuestionJob(string Sentence, QuestionDetectionResult Detection);

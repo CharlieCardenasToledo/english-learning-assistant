@@ -129,9 +129,12 @@ namespace WindowsLiveCaptionsReader.Services
             {
                 bool aiSays = await IsQuestionViaAI(text, token);
                 if (aiSays)
+                {
+                    var qType = await ClassifyQuestionTypeViaAI(text, token);
                     return EnrichWithUserName(new QuestionDetectionResult
-                        { IsQuestion = true, Confidence = 0.75f, Type = QuestionType.Indirect, DetectedVia = "L4-AI" },
+                        { IsQuestion = true, Confidence = 0.75f, Type = qType, DetectedVia = "L4-AI" },
                         text, userName);
+                }
             }
 
             return new QuestionDetectionResult { IsQuestion = false, Confidence = 0f };
@@ -161,6 +164,37 @@ namespace WindowsLiveCaptionsReader.Services
                 return false;   // fail-safe: don't flood assistant on error
             }
         }
+
+        /// <summary>
+        /// Clasifica el tipo de pregunta usando LM Studio (Fase 7 - T7.1).
+        /// </summary>
+        public async Task<QuestionType> ClassifyQuestionTypeViaAI(string text, CancellationToken token = default)
+        {
+            const string system = "You are a strict linguistic classifier. " +
+                "Classify the following English sentence into exactly one of these question types:\n" +
+                "- Direct (Direct questions, e.g. What is your name?)\n" +
+                "- Indirect (Indirect questions, e.g. I wonder if you can help)\n" +
+                "- Rhetorical (Rhetorical questions, e.g. Isn't it obvious?)\n" +
+                "- Instruction (Teacher instructions or commands, e.g. Read the text, explain your answer, tell me about...)\n" +
+                "Reply with ONLY the single word: Direct, Indirect, Rhetorical, or Instruction. No explanation, no punctuation.";
+
+            string userPrompt = $"Sentence: \"{text}\"";
+
+            try
+            {
+                string answer = await _lmStudioService.AskAsync(system, userPrompt, token);
+                string clean = answer.Trim().ToUpper();
+                if (clean.Contains("INDIRECT")) return QuestionType.Indirect;
+                if (clean.Contains("RHETORICAL")) return QuestionType.Rhetorical;
+                if (clean.Contains("INSTRUCTION")) return QuestionType.Instruction;
+                return QuestionType.Direct;
+            }
+            catch
+            {
+                return QuestionType.Direct; // Fallback por defecto
+            }
+        }
+
 
         // ── Private helpers ───────────────────────────────────────────────────
 

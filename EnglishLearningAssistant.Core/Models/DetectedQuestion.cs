@@ -23,6 +23,7 @@ namespace WindowsLiveCaptionsReader.Models
         YesNo,         // "Do you understand?"
         WhQuestion,    // "Where did you go?"
         Choice,        // "Do you want tea or coffee?"
-        Rhetorical     // "Isn't it obvious?"
+        Rhetorical,    // "Isn't it obvious?"
+        Instruction    // "Read the text aloud" / "Explain the answer"
     }
 }
