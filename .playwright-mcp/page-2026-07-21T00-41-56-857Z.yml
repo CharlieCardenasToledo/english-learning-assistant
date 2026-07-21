@@ -1,0 +1,30 @@
+- generic [active]:
+  - generic [ref=f9e144]:
+    - generic [ref=f9e147]:
+      - button [ref=f9e148] [cursor=pointer]
+      - button [ref=f9e152] [cursor=pointer]
+      - button [disabled] [ref=f9e156]
+    - generic [ref=f9e160]:
+      - heading "Descargar motor de transcripción" [level=1] [ref=f9e161]
+      - paragraph [ref=f9e162]: Puedes empezar a usar Meetily después de descargar el motor de transcripción.
+    - generic [ref=f9e165]:
+      - generic [ref=f9e166]:
+        - generic [ref=f9e167]:
+          - generic [ref=f9e174]:
+            - heading "Descargar motor de transcripción" [level=3] [ref=f9e175]
+            - paragraph [ref=f9e176]: ~670 MB
+          - generic [ref=f9e182]:
+            - generic [ref=f9e183]: 0.0 MB / 670.0 MB
+            - generic [ref=f9e184]: 0%
+        - generic [ref=f9e187]:
+          - generic [ref=f9e192]:
+            - heading "Summary Engine" [level=3] [ref=f9e193]
+            - paragraph
+          - generic [ref=f9e194]: Esperando...
+      - generic [ref=f9e195]:
+        - button [disabled]
+  - region "Notifications alt+T"
+  - alert [ref=f9e84]
+  - generic [ref=f9e87] [cursor=pointer]:
+    - generic [ref=f9e90]: 18 errors
+    - button "Hide Errors" [ref=f9e91]

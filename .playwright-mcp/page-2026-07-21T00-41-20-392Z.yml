@@ -1,0 +1,24 @@
+- generic [active] [ref=f9e1]:
+  - generic [ref=f9e2]:
+    - generic [ref=f9e3]:
+      - button [ref=f9e4] [cursor=pointer]
+      - generic [ref=f9e11]:
+        - button [ref=f9e12] [cursor=pointer]:
+          - img "Logo" [ref=f9e13]
+        - button [ref=f9e14] [cursor=pointer]
+        - button [ref=f9e18] [cursor=pointer]
+        - button [ref=f9e22] [cursor=pointer]
+        - button [ref=f9e26] [cursor=pointer]
+        - button [ref=f9e30] [cursor=pointer]
+        - button "Meetily - Acerca de" [ref=f9e34] [cursor=pointer]
+    - main [ref=f9e37]:
+      - generic [ref=f9e41]:
+        - generic [ref=f9e42]:
+          - generic:
+            - generic:
+              - generic:
+                - group
+        - generic [ref=f9e48]:
+          - paragraph [ref=f9e49]: ¡Bienvenido a Meetily!
+          - paragraph [ref=f9e50]: Inicia una grabación para ver la transcripción en vivo
+  - region "Notifications alt+T"

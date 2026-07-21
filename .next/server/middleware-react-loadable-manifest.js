@@ -1,0 +1,1 @@
+self.__REACT_LOADABLE_MANIFEST='{"components\\\\AudioWaveform\\\\AudioWaveform.tsx -> @tauri-apps/api/event":{"id":7957,"files":[]},"components\\\\TitleBar\\\\TitleBar.tsx -> @tauri-apps/api/window":{"id":4687,"files":["static/chunks/687.2d2ba31045cb1494.js"]}}';

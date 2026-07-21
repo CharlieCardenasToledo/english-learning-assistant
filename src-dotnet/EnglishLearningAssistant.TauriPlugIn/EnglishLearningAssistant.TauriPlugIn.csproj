@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputPath>..\..\src-tauri\target\dotnet</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\EnglishLearningAssistant.Core\EnglishLearningAssistant.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TauriDotNetBridge" Version="2.2.0" />
+    <PackageReference Include="LLamaSharp" Version="0.19.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.19.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.1" />
+    <PackageReference Include="Serilog.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="..\..\appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- TauriDotNetBridge.targets usa $(TargetFramework)=net8.0-windows pero el runtimeconfig
+       está en lib/net8.0 (sin -windows), por lo que el Exists() falla y no se copia.
+       Además, el runtimeconfig original solo referencia Microsoft.NETCore.App, pero nuestro
+       plugin usa UIAutomationClient / WPF, que viene de Microsoft.WindowsDesktop.App.
+       Este target escribe un runtimeconfig corregido con ambos frameworks. -->
+  <Target Name="FixTauriRuntimeConfig" AfterTargets="Build">
+    <WriteLinesToFile
+      File="$(OutputPath)\TauriDotNetBridge.runtimeconfig.json"
+      Overwrite="true"
+      Lines='{
+  "runtimeOptions": {
+    "tfm": "net8.0-windows",
+    "frameworks": [
+      { "name": "Microsoft.NETCore.App",      "version": "8.0.0" },
+      { "name": "Microsoft.WindowsDesktop.App","version": "8.0.0" }
+    ],
+    "configProperties": {
+      "System.Reflection.Metadata.MetadataUpdater.IsSupported": false,
+      "System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization": false
+    }
+  }
+}' />
+  </Target>
+
+</Project>

@@ -12,9 +12,10 @@ namespace EnglishLearningAssistant.Application.Sessions;
 public record ProviderHealth(string Name, bool IsOnline, string Message);
 
 /// <summary>
-/// Evento emitido cuando llega un nuevo segmento confirmado.
+/// Evento emitido cuando llega un nuevo segmento (parcial, confirmado o solo traducción).
+/// IsTranslationOnly=true → el segmento ya fue publicado; solo enviar la traducción al frontend.
 /// </summary>
-public record SegmentReadyEvent(TranscriptSegment Segment, TranslationResult? Translation);
+public record SegmentReadyEvent(TranscriptSegment Segment, TranslationResult? Translation, bool IsTranslationOnly = false);
 
 /// <summary>
 /// Opciones de configuración del orquestador.
@@ -173,7 +174,8 @@ public sealed class SessionOrchestrator : IAsyncDisposable
     {
         if (segment.IsPartial)
         {
-            // Parciales: solo actualizar UI de transcripción
+            // Parciales: publicar al frontend y reiniciar timer
+            SegmentReady?.Invoke(this, new SegmentReadyEvent(segment, null));
             TranscriptionTextUpdated?.Invoke(this, segment.Text);
             RestartSettleTimer();
             return;
@@ -218,7 +220,17 @@ public sealed class SessionOrchestrator : IAsyncDisposable
         string previous = _previousSegmentText;
         _previousSegmentText = sentence;
 
-        // Fire and forget — ambos procesos son independientes
+        // Publicar transcripción confirmada inmediatamente (sin esperar traducción)
+        var confirmed = new TranscriptSegment
+        {
+            Text      = sentence,
+            IsPartial = false,
+            Source    = _transcriptionProvider.Name,
+            StartTime = TimeSpan.Zero,
+        };
+        SegmentReady?.Invoke(this, new SegmentReadyEvent(confirmed, null));
+
+        // Fire and forget — traducción y detección de preguntas en paralelo
         _ = ProcessSentenceForQuestionsAsync(sentence, previous);
         _ = AutoTranslateAsync(sentence);
     }
@@ -266,13 +278,14 @@ public sealed class SessionOrchestrator : IAsyncDisposable
             {
                 var segment = new TranscriptSegment
                 {
-                    Text = sentence,
-                    Source = _transcriptionProvider.Name,
-                    StartTime = TimeSpan.Zero, // TODO: T3.1 — conectar con timestamps reales
-                    IsPartial = false
+                    Text      = sentence,
+                    Source    = _transcriptionProvider.Name,
+                    StartTime = TimeSpan.Zero,
+                    IsPartial = false,
                 };
 
-                SegmentReady?.Invoke(this, new SegmentReadyEvent(segment, result));
+                // IsTranslationOnly=true: la transcripción ya fue publicada en FlushFragmentBuffer
+                SegmentReady?.Invoke(this, new SegmentReadyEvent(segment, result, IsTranslationOnly: true));
                 StatusChanged?.Invoke(this, DateTimeOffset.Now.ToString("HH:mm"));
             }
         }

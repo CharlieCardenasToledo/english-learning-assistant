@@ -1,0 +1,24 @@
+- generic [active]:
+  - generic [ref=f9e96]:
+    - generic [ref=f9e99]:
+      - button [ref=f9e100] [cursor=pointer]
+      - button [disabled] [ref=f9e104]
+      - button [disabled] [ref=f9e118]
+    - generic [ref=f9e122]:
+      - heading "¡Todo listo!" [level=1] [ref=f9e123]
+      - paragraph [ref=f9e124]: "Meetily está listo para usar. Esto es lo que configuramos:"
+    - generic [ref=f9e127]:
+      - generic [ref=f9e129]:
+        - 'heading "Siguiente 1 : Descargar motor de transcripción" [level=3] [ref=f9e132]'
+        - heading [level=3] [ref=f9e135]:
+          - text: "Siguiente 2 : Resumen de IA"
+          - button [ref=f9e136] [cursor=pointer]
+      - generic [ref=f9e139]:
+        - button "¡Vamos!" [ref=f9e140] [cursor=pointer]
+        - link "Report issues on GitHub" [ref=f9e142] [cursor=pointer]:
+          - /url: https://github.com/Zackriya-Solutions/meeting-minutes
+  - region "Notifications alt+T"
+  - alert [ref=f9e84]
+  - generic [ref=f9e87] [cursor=pointer]:
+    - generic [ref=f9e90]: 14 errors
+    - button "Hide Errors" [ref=f9e91]

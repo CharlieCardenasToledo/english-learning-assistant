@@ -4,5 +4,8 @@
   </Folder>
   <Project Path="WindowsLiveCaptionsReader.csproj" />
   <Project Path="EnglishLearningAssistant.Core/EnglishLearningAssistant.Core.csproj" />
+  <Folder Name="/tauri/">
+    <Project Path="src-dotnet/EnglishLearningAssistant.TauriPlugIn/EnglishLearningAssistant.TauriPlugIn.csproj" />
+  </Folder>
 </Solution>
 

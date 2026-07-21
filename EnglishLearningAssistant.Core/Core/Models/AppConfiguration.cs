@@ -6,8 +6,10 @@ namespace EnglishLearningAssistant.Core.Models;
 /// <summary>Configuración de acceso al LLM (LM Studio u otro proveedor OpenAI-compatible).</summary>
 public sealed class LmStudioConfig
 {
+    public string Provider { get; set; } = "lmstudio";
     public string BaseUrl { get; set; } = "http://localhost:1234";
     public string ModelName { get; set; } = "llama-3.2-3b-instruct";
+    public string? ApiKey { get; set; }
     public int TimeoutSeconds { get; set; } = 60;
 }
 
@@ -89,8 +91,14 @@ public sealed class AppConfiguration
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "EnglishLearningAssistant", "settings.json");
 
+        // AppDomain.CurrentDomain.BaseDirectory devuelve "" cuando el runtime es cargado vía
+        // netcorehost (Tauri/TauriDotNetBridge). En ese caso usamos la ubicación del assembly.
+        var basePath = string.IsNullOrEmpty(AppDomain.CurrentDomain.BaseDirectory)
+            ? Path.GetDirectoryName(typeof(AppConfiguration).Assembly.Location)!
+            : AppDomain.CurrentDomain.BaseDirectory;
+
         var configBuilder = new ConfigurationBuilder()
-            .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
+            .SetBasePath(basePath)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
 
         if (File.Exists(userSettingsPath))
@@ -111,7 +119,10 @@ public sealed class AppConfiguration
         // Mapear configuraciones planas desde settings.json del usuario
         if (raw["userName"] is string user) cfg.StudentName = user;
         if (raw["englishLevel"] is string level) cfg.CefrLevel = level;
+        if (raw["llmProvider"] is string llmProv) cfg.LmStudio.Provider = llmProv;
+        if (raw["lmStudioBaseUrl"] is string lmBaseUrl) cfg.LmStudio.BaseUrl = lmBaseUrl;
         if (raw["lmStudioModel"] is string lmModel) cfg.LmStudio.ModelName = lmModel;
+        if (raw["lmStudioApiKey"] is string lmApiKey) cfg.LmStudio.ApiKey = lmApiKey;
         if (raw["whisperModel"] is string whModel)
         {
             // Convertir "ggml-small.en.bin" -> "small.en"

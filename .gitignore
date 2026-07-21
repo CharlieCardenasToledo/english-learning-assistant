@@ -32,3 +32,4 @@ CLAUDE.md
 image copy.png
 *.exe
 installer/*.exe
+node_modules
