@@ -33,3 +33,16 @@ image copy.png
 *.exe
 installer/*.exe
 node_modules
+.next/
+out/
+.playwright-mcp/
+tsconfig.tsbuildinfo
+*.pack
+*.pack.gz
+src-tauri/target/
+# Plan files (internal use only)
+FRONTEND_*.md
+*_PLAN.md
+*_IMPLEMENTATION_PLAN.md
+ui-ux-audit-*.md
+analytics.generated.diff
