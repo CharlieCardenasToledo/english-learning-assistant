@@ -1,31 +1,45 @@
 # English Learning Assistant
 
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/CharlieCardenasToledo/english-learning-assistant/releases)
+[![Tauri v2](https://img.shields.io/badge/Tauri-v2-FFC131?logo=tauri&logoColor=white)](https://tauri.app/)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)](https://nextjs.org/)
 [![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
-[![WPF](https://img.shields.io/badge/WPF-Windows-0078D4?logo=windows&logoColor=white)](https://docs.microsoft.com/en-us/dotnet/desktop/wpf/)
-[![LM Studio](https://img.shields.io/badge/LM_Studio-local_AI-6B4FBB?logoColor=white)](https://lmstudio.ai/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows_10%2F11-0078D4?logo=windows)](https://www.microsoft.com/windows)
 
-> Real-time AI assistant for English learners. Captures live captions, translates to Spanish automatically, detects teacher questions, and generates contextual response suggestions — all running locally on your machine.
+> Real-time AI assistant for English learners. Captures Windows Live Captions, translates to Spanish automatically, detects questions, and generates contextual response suggestions — all running locally on your machine.
 
 **English | [Español](README.es.md)**
 
 ---
 
-![App demo](demo.gif)
+![Session in progress](docs/screenshots/session-live.png)
 
 ---
 
 ## How it works
 
-The app runs as a transparent overlay on top of any other window (Zoom, Teams, your browser). It reads the text that Windows Live Captions is transcribing and:
+English Learning Assistant runs as a native desktop app (built with Tauri v2 + Next.js). It reads the text that Windows Live Captions is transcribing and:
 
-1. **Displays** the English transcription in real time (top-left)
-2. **Translates** each sentence to Spanish automatically (top-right)
-3. **Detects** when the teacher asks a question using a 4-level cascade (bottom-left)
-4. **Generates** 3 response options in English + Spanish via LM Studio (bottom-right)
+1. **Shows** the English transcription in real time
+2. **Translates** each sentence to Spanish automatically
+3. **Detects** questions using a 4-level cascade (L1–L4)
+4. **Generates** AI-powered response suggestions in both languages
 
 Everything runs locally — no data leaves your machine.
+
+---
+
+## Screenshots
+
+| Main view | Session history |
+|-----------|-----------------|
+| ![Main view](docs/screenshots/main-idle.png) | ![Sessions](docs/screenshots/sessions.png) |
+
+| Settings — Built-in AI | Vocabulary manager |
+|------------------------|-------------------|
+| ![Settings](docs/screenshots/settings.png) | ![Vocabulary](docs/screenshots/vocabulary.png) |
 
 ---
 
@@ -33,34 +47,36 @@ Everything runs locally — no data leaves your machine.
 
 ### Real-time transcription and translation
 - Reads Windows Live Captions via UI Automation — no audio processing required
-- Auto-translates every committed sentence to Spanish using LM Studio
-- Fallback to LibreTranslate (local server) when available for faster translation
-- Manual microphone input as a secondary source
+- Translates every committed sentence to Spanish
+- Three translation providers: **Built-in AI** (no external server), **LM Studio**, **Ollama**
+- Microphone input as a secondary source via Whisper
 
 ### Intelligent question detection
 - **L1** — Explicit question mark (confidence 0.95)
 - **L2** — WH-word or auxiliary verb at sentence start (0.80–0.85)
 - **L2b** — Tag questions like "right?", "isn't it?" (0.85)
 - **L3** — Indirect starters like "I wonder…", "I'd like to know…" (0.70)
-- **L4** — LM Studio classifier for ambiguous cases (0.75)
+- **L4** — LLM classifier for ambiguous cases (0.75)
 - Username detection: boosts confidence when your name appears in the sentence
-- Fragmentation retry: combines current and previous sentence when detection is uncertain
 
 ### AI response suggestions
-- Generates exactly 3 numbered options tailored to your CEFR level (A2–C1)
-- All options in English; Spanish translation rendered side-by-side
-- Context-aware: uses the last 15 lines of transcription as background
-- Streams tokens in real time — no waiting for the full response
+- Generates contextual responses tailored to your CEFR level (A2–C1)
+- Streams tokens in real time — responses appear as they are generated
+- Works with Built-in AI, LM Studio, or Ollama
+
+### Built-in AI (no external server required)
+- Download a model directly from Settings — runs entirely inside the app
+- Powered by [LLamaSharp](https://github.com/SciSharp/LLamaSharp) (llama.cpp bindings for .NET)
+- Supported models: Qwen 2.5 (0.5B, 1.5B, 3B, 7B) — recommended: 1.5B for most machines
 
 ### Session management
 - Every class is saved as a session in a local SQLite database
-- Sessions include transcription entries, detected questions, and AI-generated summaries
-- Resume a previous session with a single click
+- Sessions include transcription, detected questions, and duration
 - Export any session to Markdown
+- Resume or review past sessions from the history panel
 
 ### Vocabulary manager
 - Add words with translation, definition, and CEFR level
-- Analyze clipboard text to extract vocabulary automatically
 - Search and delete entries
 
 ---
@@ -69,155 +85,99 @@ Everything runs locally — no data leaves your machine.
 
 | Component | Details |
 |-----------|---------|
-| **OS** | Windows 10 22H2+ or Windows 11 (Live Captions requires this) |
-| **.NET** | .NET 8.0 runtime or SDK |
-| **LM Studio** | Any version — must be running with a model loaded |
+| **OS** | Windows 10 22H2+ or Windows 11 |
 | **Windows Live Captions** | Enable with `Win + Ctrl + L` |
+| **AI provider** | Built-in AI (no install), LM Studio, or Ollama — at least one required |
 
-LM Studio is the only external dependency. Whisper is optional for microphone transcription and is not required for the main workflow.
+> **No Rust or Node.js required to run the app.** They are only needed to build from source.
 
 ---
 
 ## Getting started
 
-### 1. Clone and build
+### Option A — Download the installer (recommended)
+
+Go to [Releases](https://github.com/CharlieCardenasToledo/english-learning-assistant/releases) and download the latest `.exe` installer.
+
+### Option B — Build from source
+
+**Prerequisites:** [Node.js 20+](https://nodejs.org/), [pnpm](https://pnpm.io/), [Rust (stable)](https://rustup.rs/), [.NET 8 SDK](https://dotnet.microsoft.com/download)
 
 ```bash
 git clone https://github.com/CharlieCardenasToledo/english-learning-assistant.git
 cd english-learning-assistant
-dotnet build
-dotnet run
+pnpm install
+pnpm tauri dev      # development (hot reload)
+pnpm tauri build    # production build
 ```
 
-### 2. Start LM Studio
+`pnpm tauri dev` automatically:
+1. Builds the .NET plugin (`EnglishLearningAssistant.TauriPlugIn`)
+2. Starts the Next.js dev server
+3. Launches the Tauri window
 
-Open LM Studio, load any model (Gemma, Llama, Mistral, etc.), and start the local server. The app detects it automatically.
+### First run
 
-### 3. Enable Windows Live Captions
+On the **first launch**, an onboarding wizard guides you through:
+1. Choosing an AI provider (Built-in, LM Studio, or Ollama)
+2. Downloading a model if using Built-in AI
+3. Setting your English level (A2–C1) and username
 
-Press `Win + Ctrl + L` — a caption bar appears at the top or bottom of your screen. The app reads from it via UI Automation.
+### Enable Windows Live Captions
 
-### First run vs. subsequent runs
-
-On the **first run**, a setup wizard checks your LM Studio connection and lets you optionally download a Whisper model for microphone input. On **subsequent runs**, the wizard is skipped and the app opens directly in the overlay.
+Press `Win + Ctrl + L` — a caption bar appears. The app reads from it automatically.
 
 ---
 
-## UI layout
+## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  LIVE  Sesión 21 may, 14:03          [Asistente] [Vocab] [Mic]  │
-├──────────────────────────┬───────────────────────────────────────┤
-│  EN  TRANSCRIPCIÓN       │  ES  TRADUCCIÓN                       │
-│                          │                                       │
-│  Live captions text      │  Traducción automática                │
-│  appears here in         │  aparece aquí en                      │
-│  real time               │  tiempo real                          │
-├──────────────────────────┼───────────────────────────────────────┤
-│  PREGUNTA DETECTADA      │  OPCIONES DE RESPUESTA                │
-│                          │  EN                                   │
-│  ❓ 85%  Question text   │  1. First option...                   │
-│                          │  2. Second option...                  │
-│  CONTEXTO                │  3. Third option...                   │
-│  Context from class      │  ES                                   │
-│                          │  1. Primera opción...                 │
-│  [Manual input box  →]   │  2. Segunda opción...                 │
-├──────────────────────────┴───────────────────────────────────────┤
-│  [Traducir]  [Limpiar]  [Resumen]                               │
-└──────────────────────────────────────────────────────────────────┘
+english-learning-assistant/
+├── src/                          # Next.js frontend (React + TypeScript)
+│   ├── app/                      # Pages: main, sessions, vocabulary, settings
+│   ├── components/               # UI components (TranscriptionPanel, QuestionPanel…)
+│   ├── hooks/                    # useCaptionEvents, useTauriInvoke
+│   └── types/                    # Shared TypeScript types
+├── src-tauri/                    # Tauri v2 shell (Rust)
+│   ├── src/                      # Rust entry point + tauri-dotnet-bridge
+│   └── capabilities/             # Tauri permission model
+├── src-dotnet/
+│   └── EnglishLearningAssistant.TauriPlugIn/   # .NET 8 HTTP/SignalR plugin
+│       ├── Controllers/          # REST endpoints (session, settings, vocabulary, AI)
+│       ├── Providers/            # Translation: LmStudio, Ollama, LocalLlama
+│       └── Services/             # BuiltInAiService, CaptionHostedService
+└── EnglishLearningAssistant.Core/              # Shared logic (.NET class library)
+    ├── Application/Sessions/     # SessionOrchestrator — question detection pipeline
+    └── Services/                 # LmStudioService, QuestionDetectionService…
 ```
 
-The window is a full-screen transparent overlay. Drag by the header to move. Adjust opacity in Settings.
+The Tauri shell hosts a .NET 8 runtime via [`tauri-dotnet-bridge`](https://crates.io/crates/tauri-dotnet-bridge-host). The frontend communicates with the .NET plugin over a local SignalR connection. Live Captions text is read via UI Automation.
 
 ---
 
-## Keyboard shortcuts
+## AI providers
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl + Space` | Toggle AI Assistant panel |
-| `Ctrl + T` | Translate full transcription manually |
-| `Ctrl + M` | Pause / Resume Live Captions capture |
-| `Ctrl + Shift + C` | Clear all panels |
-| `Esc` | Close any open overlay (Settings / Sessions / Assistant) |
-| `Win + Ctrl + L` | Toggle Windows Live Captions (system shortcut) |
-
----
-
-## Project structure
-
-```
-WindowsLiveCaptionsReader/
-├── Services/
-│   ├── CaptionReader.cs              # UI Automation reader for Live Captions
-│   ├── CaptionPipeline.cs            # Sentence accumulation state machine
-│   ├── LmStudioService.cs            # LM Studio API client (OpenAI-compatible)
-│   ├── QuestionDetectionService.cs   # 4-level detection cascade (L1–L4)
-│   ├── SessionService.cs             # SQLite session persistence (EF Core)
-│   ├── VocabularyService.cs          # Vocabulary CRUD
-│   ├── AudioCaptureService.cs        # Microphone input (NAudio)
-│   ├── LibreTranslateService.cs      # Local LibreTranslate fallback
-│   ├── WhisperService.cs             # Optional Whisper transcription
-│   └── AppLogger.cs                  # File-based logger
-├── Models/                           # EF Core entities
-├── MainWindow.xaml / .cs             # 4-quadrant overlay
-├── SetupWindow.xaml / .cs            # First-run wizard
-├── VocabularyWindow.xaml / .cs       # Vocabulary manager
-└── WindowsLiveCaptionsReader.Tests/  # xUnit test suite (36 tests, L1–L3)
-```
-
----
-
-## Architecture note
-
-Question detection and AI generation are decoupled via a bounded `Channel<QuestionJob>`:
-
-```
-CaptionPipeline.Feed()
-  └── ProcessSentenceAsync()     L1-L3 regex detection (<1 ms, no LLM)
-        ├── confidence >= 0.70   cancel in-flight generation, enqueue
-        ├── confidence 0.60-0.69 show badge, run L4-AI via TryWrite
-        └── not a question       discard
-
-Channel<QuestionJob> (capacity=1, DropOldest)
-  └── RunQuestionWorkerAsync()   single consumer, lifetime of window
-        └── GenerateResponseAsync() streams context + EN options + ES translation
-```
-
-A new high-confidence question always cancels the current generation. L4-AI results never interrupt an ongoing response.
-
----
-
-## Configuration
-
-Settings are saved to `%LOCALAPPDATA%\EnglishLearningAssistant\settings.json`:
-
-```json
-{
-  "userName": "Charlie",
-  "englishLevel": "B1",
-  "lmStudioModel": "google/gemma-4-e4b"
-}
-```
-
-Change name, level, and model via the **Settings** panel in the app. No restart required.
+| Provider | Setup | Notes |
+|----------|-------|-------|
+| **Built-in AI** | Download model from Settings | No external server. Best for offline use. |
+| **LM Studio** | Start server on port 1234 | Supports any GGUF model |
+| **Ollama** | `ollama serve` | Supports any Ollama model |
 
 ---
 
 ## Troubleshooting
 
-**Nothing appears in the transcription panel**
-Enable Windows Live Captions with `Win + Ctrl + L`. The app reads from the captions window via UI Automation — if nothing appears after 10 seconds, try toggling captions off and on.
+**Transcription panel is empty**
+Enable Windows Live Captions with `Win + Ctrl + L`. If nothing appears after 10 seconds, toggle captions off and on.
+
+**Translation not working**
+Open Settings → Provider and verify your AI provider is running. For Built-in AI, check that a model is downloaded.
 
 **LM Studio not connecting**
-Open LM Studio, load a model, start the local server, then click the refresh button next to the model selector in Settings.
+Open LM Studio, load a model, start the local server on port 1234.
 
-**Question not detected**
-The cascade requires at least 3 words. For ambiguous cases, type the question manually in the input box at the bottom of the "Pregunta detectada" panel and press Enter.
-
-**Translation not appearing**
-Translation runs automatically on each committed sentence. Check the status label next to "TRADUCCIÓN" for error messages.
+**Questions not being detected**
+The cascade requires at least 3 words. Short fragments are held until a full sentence is committed.
 
 ---
 
@@ -225,7 +185,7 @@ Translation runs automatically on each committed sentence. Check the status labe
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feat/your-feature`
-3. Run the test suite: `dotnet test WindowsLiveCaptionsReader.Tests/`
+3. Run the test suite: `dotnet test tests/`
 4. Commit with a clear message and open a Pull Request
 
 ---

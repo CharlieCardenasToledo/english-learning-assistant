@@ -1,31 +1,45 @@
 # English Learning Assistant
 
+[![Versión](https://img.shields.io/badge/versión-2.0.0-blue)](https://github.com/CharlieCardenasToledo/english-learning-assistant/releases)
+[![Tauri v2](https://img.shields.io/badge/Tauri-v2-FFC131?logo=tauri&logoColor=white)](https://tauri.app/)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)](https://nextjs.org/)
 [![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
-[![WPF](https://img.shields.io/badge/WPF-Windows-0078D4?logo=windows&logoColor=white)](https://docs.microsoft.com/en-us/dotnet/desktop/wpf/)
-[![LM Studio](https://img.shields.io/badge/LM_Studio-IA_local-6B4FBB?logoColor=white)](https://lmstudio.ai/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-22c55e.svg)](LICENSE)
 [![Plataforma](https://img.shields.io/badge/Plataforma-Windows_10%2F11-0078D4?logo=windows)](https://www.microsoft.com/windows)
 
-> Asistente de IA en tiempo real para estudiantes de inglés. Captura los subtítulos en vivo, traduce al español automáticamente, detecta preguntas del profesor y genera sugerencias de respuesta — todo ejecutándose localmente en tu equipo.
+> Asistente de IA en tiempo real para estudiantes de inglés. Captura los subtítulos de Windows Live Captions, traduce al español automáticamente, detecta preguntas y genera sugerencias de respuesta — todo ejecutándose localmente en tu equipo.
 
 **[English](README.md) | Español**
 
 ---
 
-![Demostración de la app](demo.gif)
+![Sesión en progreso](docs/screenshots/session-live.png)
 
 ---
 
 ## Cómo funciona
 
-La app corre como una superposición transparente sobre cualquier otra ventana (Zoom, Teams, el navegador). Lee el texto que Windows Live Captions está transcribiendo y:
+English Learning Assistant corre como una app de escritorio nativa (construida con Tauri v2 + Next.js). Lee el texto que Windows Live Captions está transcribiendo y:
 
-1. **Muestra** la transcripción en inglés en tiempo real (arriba izquierda)
-2. **Traduce** cada oración al español automáticamente (arriba derecha)
-3. **Detecta** cuando el profesor hace una pregunta mediante una cascada de 4 niveles (abajo izquierda)
-4. **Genera** 3 opciones de respuesta en inglés + español mediante LM Studio (abajo derecha)
+1. **Muestra** la transcripción en inglés en tiempo real
+2. **Traduce** cada oración al español automáticamente
+3. **Detecta** preguntas mediante una cascada de 4 niveles (L1–L4)
+4. **Genera** sugerencias de respuesta con IA en ambos idiomas
 
 Todo corre de forma local — ningún dato sale de tu equipo.
+
+---
+
+## Capturas de pantalla
+
+| Vista principal | Historial de sesiones |
+|-----------------|----------------------|
+| ![Vista principal](docs/screenshots/main-idle.png) | ![Sesiones](docs/screenshots/sessions.png) |
+
+| Configuración — IA Integrada | Gestor de vocabulario |
+|------------------------------|----------------------|
+| ![Configuración](docs/screenshots/settings.png) | ![Vocabulario](docs/screenshots/vocabulary.png) |
 
 ---
 
@@ -33,34 +47,36 @@ Todo corre de forma local — ningún dato sale de tu equipo.
 
 ### Transcripción y traducción en tiempo real
 - Lee Windows Live Captions mediante UI Automation — no requiere procesamiento de audio
-- Traduce automáticamente cada oración confirmada al español usando LM Studio
-- Respaldo a LibreTranslate (servidor local) para traducciones más rápidas
-- Entrada de micrófono como fuente secundaria
+- Traduce cada oración confirmada al español
+- Tres proveedores de traducción: **IA Integrada** (sin servidor externo), **LM Studio**, **Ollama**
+- Entrada de micrófono como fuente secundaria mediante Whisper
 
 ### Detección inteligente de preguntas
 - **L1** — Signo de interrogación explícito (confianza 0.95)
 - **L2** — Palabra WH o verbo auxiliar al inicio (0.80–0.85)
 - **L2b** — Preguntas de coletilla como "right?", "isn't it?" (0.85)
 - **L3** — Iniciadores indirectos como "I wonder…", "I'd like to know…" (0.70)
-- **L4** — Clasificador LM Studio para casos ambiguos (0.75)
+- **L4** — Clasificador LLM para casos ambiguos (0.75)
 - Detección de nombre: aumenta la confianza cuando tu nombre aparece en la oración
-- Reintento por fragmentación: combina la oración actual y la anterior si la detección es incierta
 
 ### Sugerencias de respuesta con IA
-- Genera exactamente 3 opciones numeradas adaptadas a tu nivel MCER (A2–C1)
-- Todas las opciones en inglés; traducción al español renderizada en paralelo
-- Consciente del contexto: usa las últimas 15 líneas de transcripción como fondo
-- Transmite los tokens en tiempo real — sin esperar la respuesta completa
+- Genera respuestas contextuales adaptadas a tu nivel MCER (A2–C1)
+- Transmite tokens en tiempo real — las respuestas aparecen mientras se generan
+- Compatible con IA Integrada, LM Studio u Ollama
+
+### IA Integrada (sin servidor externo)
+- Descarga un modelo directamente desde Configuración — corre completamente dentro de la app
+- Impulsado por [LLamaSharp](https://github.com/SciSharp/LLamaSharp) (bindings de llama.cpp para .NET)
+- Modelos soportados: Qwen 2.5 (0.5B, 1.5B, 3B, 7B) — recomendado: 1.5B para la mayoría de equipos
 
 ### Gestión de sesiones
-- Cada clase se guarda como una sesión en una base de datos SQLite local
-- Las sesiones incluyen transcripciones, preguntas detectadas y resúmenes generados por IA
-- Retoma una sesión anterior con un solo clic
+- Cada clase se guarda como sesión en una base de datos SQLite local
+- Las sesiones incluyen transcripción, preguntas detectadas y duración
 - Exporta cualquier sesión a Markdown
+- Retoma o revisa sesiones anteriores desde el historial
 
 ### Gestor de vocabulario
-- Añade palabras con traducción, definición y nivel MCER
-- Analiza el texto del portapapeles para extraer vocabulario automáticamente
+- Agrega palabras con traducción, definición y nivel MCER
 - Busca y elimina entradas
 
 ---
@@ -69,104 +85,108 @@ Todo corre de forma local — ningún dato sale de tu equipo.
 
 | Componente | Detalles |
 |------------|---------|
-| **SO** | Windows 10 22H2+ o Windows 11 (Live Captions lo requiere) |
-| **.NET** | Runtime o SDK de .NET 8.0 |
-| **LM Studio** | Cualquier versión — debe estar corriendo con un modelo cargado |
-| **Windows Live Captions** | Actívalo con `Win + Ctrl + L` |
+| **SO** | Windows 10 22H2+ o Windows 11 |
+| **Windows Live Captions** | Activa con `Win + Ctrl + L` |
+| **Proveedor de IA** | IA Integrada (sin instalación), LM Studio u Ollama — se requiere al menos uno |
 
-LM Studio es la única dependencia externa. Whisper es opcional para transcripción de micrófono y no es necesario para el flujo principal.
+> **No necesitas Rust ni Node.js para ejecutar la app.** Solo son necesarios para compilar desde el código fuente.
 
 ---
 
-## Inicio rápido
+## Primeros pasos
 
-### 1. Clonar y compilar
+### Opción A — Descargar el instalador (recomendado)
+
+Ve a [Releases](https://github.com/CharlieCardenasToledo/english-learning-assistant/releases) y descarga el último instalador `.exe`.
+
+### Opción B — Compilar desde el código fuente
+
+**Requisitos previos:** [Node.js 20+](https://nodejs.org/), [pnpm](https://pnpm.io/), [Rust (stable)](https://rustup.rs/), [.NET 8 SDK](https://dotnet.microsoft.com/download)
 
 ```bash
 git clone https://github.com/CharlieCardenasToledo/english-learning-assistant.git
 cd english-learning-assistant
-dotnet build
-dotnet run
+pnpm install
+pnpm tauri dev      # desarrollo (hot reload)
+pnpm tauri build    # build de producción
 ```
 
-### 2. Iniciar LM Studio
+`pnpm tauri dev` automáticamente:
+1. Compila el plugin .NET (`EnglishLearningAssistant.TauriPlugIn`)
+2. Inicia el servidor de desarrollo Next.js
+3. Abre la ventana Tauri
 
-Abre LM Studio, carga cualquier modelo (Gemma, Llama, Mistral, etc.) e inicia el servidor local. La app lo detecta automáticamente.
+### Primera ejecución
 
-### 3. Activar Windows Live Captions
+En el **primer inicio**, un asistente de configuración te guía:
+1. Elegir un proveedor de IA (Integrada, LM Studio u Ollama)
+2. Descargar un modelo si usas IA Integrada
+3. Configurar tu nivel de inglés (A2–C1) y nombre de usuario
 
-Presiona `Win + Ctrl + L` — aparece una barra de subtítulos en la parte superior o inferior de tu pantalla. La app la lee mediante UI Automation.
+### Activar Windows Live Captions
 
-### Primera ejecución vs. ejecuciones posteriores
-
-En la **primera ejecución**, un asistente de configuración verifica tu conexión con LM Studio y te permite descargar opcionalmente un modelo Whisper para entrada de micrófono. En las **ejecuciones posteriores**, el asistente se omite y la app se abre directamente en la superposición.
+Presiona `Win + Ctrl + L` — aparece una barra de subtítulos. La app la lee automáticamente.
 
 ---
 
-## Diseño de la interfaz
+## Arquitectura
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  LIVE  Sesión 21 may, 14:03          [Asistente] [Vocab] [Mic]  │
-├──────────────────────────┬───────────────────────────────────────┤
-│  EN  TRANSCRIPCIÓN       │  ES  TRADUCCIÓN                       │
-│                          │                                       │
-│  El texto de Live        │  The Live Captions text               │
-│  Captions aparece aquí   │  appears here automatically           │
-│  en tiempo real          │  translated in real time              │
-├──────────────────────────┼───────────────────────────────────────┤
-│  PREGUNTA DETECTADA      │  OPCIONES DE RESPUESTA                │
-│                          │  EN                                   │
-│  ❓ 85%  Texto pregunta  │  1. Primera opción...                 │
-│                          │  2. Segunda opción...                 │
-│  CONTEXTO                │  3. Tercera opción...                 │
-│  Contexto de la clase    │  ES                                   │
-│                          │  1. Primera opción...                 │
-│  [Entrada manual  →]     │  2. Segunda opción...                 │
-├──────────────────────────┴───────────────────────────────────────┤
-│  [Traducir]  [Limpiar]  [Resumen]                               │
-└──────────────────────────────────────────────────────────────────┘
+english-learning-assistant/
+├── src/                          # Frontend Next.js (React + TypeScript)
+│   ├── app/                      # Páginas: principal, sesiones, vocabulario, configuración
+│   ├── components/               # Componentes UI (TranscriptionPanel, QuestionPanel…)
+│   ├── hooks/                    # useCaptionEvents, useTauriInvoke
+│   └── types/                    # Tipos TypeScript compartidos
+├── src-tauri/                    # Shell Tauri v2 (Rust)
+│   ├── src/                      # Punto de entrada Rust + tauri-dotnet-bridge
+│   └── capabilities/             # Modelo de permisos Tauri
+├── src-dotnet/
+│   └── EnglishLearningAssistant.TauriPlugIn/   # Plugin .NET 8 HTTP/SignalR
+│       ├── Controllers/          # Endpoints REST (sesión, configuración, vocabulario, IA)
+│       ├── Providers/            # Traducción: LmStudio, Ollama, LocalLlama
+│       └── Services/             # BuiltInAiService, CaptionHostedService
+└── EnglishLearningAssistant.Core/              # Lógica compartida (librería de clases .NET)
+    ├── Application/Sessions/     # SessionOrchestrator — pipeline de detección de preguntas
+    └── Services/                 # LmStudioService, QuestionDetectionService…
 ```
 
-La ventana es una superposición transparente a pantalla completa. Arrástrala desde el encabezado para moverla. Ajusta la opacidad en Configuración.
+El shell Tauri aloja un runtime .NET 8 mediante [`tauri-dotnet-bridge`](https://crates.io/crates/tauri-dotnet-bridge-host). El frontend se comunica con el plugin .NET a través de una conexión SignalR local. El texto de Live Captions se lee mediante UI Automation.
 
 ---
 
-## Atajos de teclado
+## Proveedores de IA
 
-| Atajo | Acción |
-|-------|--------|
-| `Ctrl + Space` | Alternar panel del Asistente de IA |
-| `Ctrl + T` | Traducir toda la transcripción manualmente |
-| `Ctrl + M` | Pausar / Reanudar la captura de Live Captions |
-| `Ctrl + Shift + C` | Limpiar todos los paneles |
-| `Esc` | Cerrar cualquier superposición abierta (Configuración / Sesiones / Asistente) |
-| `Win + Ctrl + L` | Alternar Windows Live Captions (atajo del sistema) |
+| Proveedor | Configuración | Notas |
+|-----------|--------------|-------|
+| **IA Integrada** | Descarga el modelo desde Configuración | Sin servidor externo. Ideal para uso sin conexión. |
+| **LM Studio** | Inicia el servidor en el puerto 1234 | Compatible con cualquier modelo GGUF |
+| **Ollama** | `ollama serve` | Compatible con cualquier modelo Ollama |
 
 ---
 
 ## Solución de problemas
 
-**Nada aparece en el panel de transcripción**
-Activa Windows Live Captions con `Win + Ctrl + L`. La app lee la ventana de subtítulos mediante UI Automation — si nada aparece después de 10 segundos, intenta desactivar y reactivar los subtítulos.
+**El panel de transcripción está vacío**
+Activa Windows Live Captions con `Win + Ctrl + L`. Si no aparece nada en 10 segundos, desactiva y vuelve a activar los subtítulos.
+
+**La traducción no funciona**
+Ve a Configuración → Proveedor y verifica que tu proveedor de IA esté corriendo. Para IA Integrada, comprueba que haya un modelo descargado.
 
 **LM Studio no conecta**
-Abre LM Studio, carga un modelo, inicia el servidor local y luego haz clic en el botón de actualizar junto al selector de modelos en Configuración.
+Abre LM Studio, carga un modelo y arranca el servidor local en el puerto 1234.
 
-**Pregunta no detectada**
-La cascada requiere al menos 3 palabras. Para casos ambiguos, escribe la pregunta manualmente en el cuadro de entrada en la parte inferior del panel "Pregunta detectada" y presiona Enter.
-
-**La traducción no aparece**
-La traducción corre automáticamente en cada oración confirmada. Revisa la etiqueta de estado junto a "TRADUCCIÓN" para mensajes de error.
+**No se detectan preguntas**
+La cascada requiere al menos 3 palabras. Los fragmentos cortos se acumulan hasta que se confirma una oración completa.
 
 ---
 
 ## Contribuir
 
 1. Haz un fork del repositorio
-2. Crea una rama de funcionalidad: `git checkout -b feat/tu-funcionalidad`
-3. Ejecuta las pruebas: `dotnet test WindowsLiveCaptionsReader.Tests/`
-4. Haz commit con un mensaje claro y abre un Pull Request
+2. Crea una rama: `git checkout -b feat/tu-funcionalidad`
+3. Ejecuta las pruebas: `dotnet test tests/`
+4. Crea un commit con un mensaje claro y abre un Pull Request
 
 ---
 
