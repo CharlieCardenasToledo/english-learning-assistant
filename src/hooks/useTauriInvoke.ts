@@ -18,11 +18,17 @@ export async function dotnetRequest<T = unknown>(
     request: JSON.stringify({ controller, action, data }),
   });
 
+  console.log(`[RPC] controller=${controller}, action=${action}, response=`, raw);
+
   const res: DotnetResponse<T> = JSON.parse(raw);
 
-  if (res.errorMessage) {
-    throw new Error(res.errorMessage);
+  // Intentar leer tanto errorMessage como ErrorMessage para tolerancia de casing
+  const errorMsg = res.errorMessage || (res as any).ErrorMessage || (res as any).error;
+  if (errorMsg) {
+    throw new Error(errorMsg);
   }
 
-  return res.data as T;
+  // Intentar leer tanto data como Data
+  const responseData = res.data !== undefined ? res.data : (res as any).Data;
+  return responseData as T;
 }

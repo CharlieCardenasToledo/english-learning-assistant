@@ -1,7 +1,19 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ChevronLeft, ChevronRight, MessageSquare, Clock, Plus } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  ChevronLeft,
+  ChevronRight,
+  MessageSquare,
+  Clock,
+  Plus,
+  Home,
+  History,
+  BookOpen,
+  Settings,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { dotnetRequest } from "@/hooks/useTauriInvoke";
 
@@ -31,6 +43,15 @@ function relativeDate(iso: string): string {
   }
 }
 
+// ─── Nav items ────────────────────────────────────────────────────────────────
+
+const navItems = [
+  { label: "Inicio",       href: "/",           icon: Home },
+  { label: "Historial",    href: "/sessions",    icon: History },
+  { label: "Vocabulario",  href: "/vocabulary",  icon: BookOpen },
+  { label: "Configuración",href: "/settings",    icon: Settings },
+] as const;
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -43,6 +64,8 @@ export function Sidebar({ onNewSession, onSelectSession, activeSessionId }: Prop
   const [expanded, setExpanded]   = useState(false);
   const [sessions, setSessions]   = useState<Session[]>([]);
   const [loading, setLoading]     = useState(false);
+  const pathname = usePathname();
+  const router   = useRouter();
 
   useEffect(() => {
     if (!expanded) return;
@@ -54,6 +77,22 @@ export function Sidebar({ onNewSession, onSelectSession, activeSessionId }: Prop
       .catch(() => setSessions([]))
       .finally(() => setLoading(false));
   }, [expanded]);
+
+  useEffect(() => {
+    if (!expanded || typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+    let cleanup: (() => void) | undefined;
+    listen("session-updated", () => {
+      dotnetRequest<Session[]>("session", "list")
+        .then((data) => setSessions(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    }).then((unlisten) => { cleanup = unlisten; });
+    return () => cleanup?.();
+  }, [expanded]);
+
+  function handleSelectSession(id: number) {
+    onSelectSession?.(id);
+    router.push(`/sessions?id=${id}`);
+  }
 
   return (
     <div
@@ -69,7 +108,7 @@ export function Sidebar({ onNewSession, onSelectSession, activeSessionId }: Prop
         <div className="flex items-center justify-between h-9 px-2 border-b border-gray-100 shrink-0">
           {expanded && (
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-1">
-              Historial
+              Menú
             </span>
           )}
           <button
@@ -82,60 +121,91 @@ export function Sidebar({ onNewSession, onSelectSession, activeSessionId }: Prop
           </button>
         </div>
 
+        {/* Main navigation */}
+        <nav className="flex flex-col gap-0.5 px-1 pt-2 shrink-0">
+          {navItems.map(({ label, href, icon: Icon }) => {
+            const isActive = pathname === href;
+            return (
+              <button
+                key={href}
+                onClick={() => router.push(href)}
+                className={cn(
+                  "flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                  isActive
+                    ? "bg-gray-900 text-white"
+                    : "text-gray-600 hover:bg-gray-50 hover:text-gray-900",
+                  !expanded && "justify-center"
+                )}
+                title={expanded ? undefined : label}
+                aria-label={label}
+              >
+                <Icon size={13} className="shrink-0" />
+                {expanded && label}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Divider */}
+        <div className="mx-2 my-2 border-t border-gray-100 shrink-0" />
+
         {/* New session button */}
         <button
           onClick={onNewSession}
           className={cn(
-            "flex items-center gap-2 mx-2 mt-2 px-2 py-1.5 rounded-lg text-xs font-medium",
-            "bg-gray-900 text-white hover:bg-gray-700 transition-colors shrink-0",
+            "flex items-center gap-2 mx-2 px-2 py-1.5 rounded-lg text-xs font-medium",
+            "bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors shrink-0",
             !expanded && "justify-center"
           )}
           title="Nueva sesión"
+          aria-label="Nueva sesión"
         >
           <Plus size={13} />
           {expanded && "Nueva sesión"}
         </button>
 
-        {/* Session list */}
-        <div className="flex-1 overflow-y-auto mt-2 space-y-0.5 px-1">
-          {loading && expanded && (
-            <p className="text-xs text-gray-400 text-center mt-4">Cargando…</p>
-          )}
-          {!loading && expanded && sessions.length === 0 && (
-            <p className="text-xs text-gray-400 text-center mt-4">Sin sesiones previas</p>
-          )}
-          {sessions.map((s) => {
-            const isActive = s.id === activeSessionId;
-            return (
-              <button
-                key={s.id}
-                onClick={() => onSelectSession?.(s.id)}
-                className={cn(
-                  "w-full flex items-start gap-2 px-2 py-2 rounded-lg text-left transition-colors",
-                  isActive
-                    ? "bg-gray-100 text-gray-900"
-                    : "text-gray-600 hover:bg-gray-50 hover:text-gray-900",
-                  !expanded && "justify-center"
-                )}
-                title={expanded ? undefined : s.title}
-              >
-                <MessageSquare size={13} className="mt-0.5 shrink-0 text-gray-400" />
-                {expanded && (
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium truncate">{s.title || "Sesión sin título"}</p>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <Clock size={9} className="text-gray-400" />
-                      <span className="text-[10px] text-gray-400">{relativeDate(s.startTime)}</span>
-                      {s.questionCount !== undefined && s.questionCount > 0 && (
-                        <span className="text-[10px] text-gray-400">· {s.questionCount} p</span>
-                      )}
+        {/* Session list (only on home route) */}
+        {pathname === "/" && (
+          <div className="flex-1 overflow-y-auto mt-2 space-y-0.5 px-1">
+            {loading && expanded && (
+              <p className="text-xs text-gray-400 text-center mt-4">Cargando…</p>
+            )}
+            {!loading && expanded && sessions.length === 0 && (
+              <p className="text-xs text-gray-400 text-center mt-4">Sin sesiones previas</p>
+            )}
+            {sessions.map((s) => {
+              const isActive = s.id === activeSessionId;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => handleSelectSession(s.id)}
+                  className={cn(
+                    "w-full flex items-start gap-2 px-2 py-2 rounded-lg text-left transition-colors",
+                    isActive
+                      ? "bg-gray-100 text-gray-900"
+                      : "text-gray-600 hover:bg-gray-50 hover:text-gray-900",
+                    !expanded && "justify-center"
+                  )}
+                  title={expanded ? undefined : s.title}
+                >
+                  <MessageSquare size={13} className="mt-0.5 shrink-0 text-gray-400" />
+                  {expanded && (
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium truncate">{s.title || "Sesión sin título"}</p>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <Clock size={9} className="text-gray-400" />
+                        <span className="text-[10px] text-gray-400">{relativeDate(s.startTime)}</span>
+                        {s.questionCount !== undefined && s.questionCount > 0 && (
+                          <span className="text-[10px] text-gray-400">· {s.questionCount} p</span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

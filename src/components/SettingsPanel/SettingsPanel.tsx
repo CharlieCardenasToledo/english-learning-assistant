@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   X, Settings, RefreshCw, Check, AlertCircle, Loader2,
-  Bot, User, ChevronRight, Cpu, Download, Trash2,
+  Bot, User, Cpu, Download, Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { dotnetRequest } from "@/hooks/useTauriInvoke";
@@ -52,12 +52,12 @@ type Tab = "builtin" | "llm" | "general";
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-interface Props { open: boolean; onClose: () => void; }
+interface Props { open: boolean; onClose: () => void; tab?: Tab; }
 
-export function SettingsPanel({ open, onClose }: Props) {
+export function SettingsPanel({ open, onClose, tab: requestedTab }: Props) {
   const [tab, setTab]         = useState<Tab>("builtin");
   const [settings, setSettings] = useState<AppSettings>({
-    studentName: "Charlie",
+    studentName: "Estudiante",
     cefrLevel: "B1",
     llm: { provider: "lmstudio", endpoint: "http://localhost:1234", model: "", apiKey: "" },
   });
@@ -65,11 +65,19 @@ export function SettingsPanel({ open, onClose }: Props) {
   const [testResult, setTestResult]   = useState<TestResult | null>(null);
   const [saving, setSaving]           = useState(false);
 
+  // Modelos disponibles del servidor (LM Studio / Ollama)
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels]     = useState(false);
+
   // Built-in AI state
   const [builtIn, setBuiltIn]                 = useState<BuiltInStatus | null>(null);
   const [loadingBuiltIn, setLoadingBuiltIn]   = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<Record<string, DownloadProgress>>({});
   const [deletingId, setDeletingId]           = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open && requestedTab) setTab(requestedTab);
+  }, [open, requestedTab]);
 
   // ── Listen for download progress events ──────────────────────────────────
   useEffect(() => {
@@ -102,11 +110,12 @@ export function SettingsPanel({ open, onClose }: Props) {
       llm: { provider: string; endpoint: string; model: string; apiKey: string };
     }>("settings", "get")
       .then((s) => {
+        const provider = s.llm?.provider ?? "lmstudio";
         setSettings({
-          studentName: s.studentName ?? "Charlie",
+          studentName: s.studentName ?? "Estudiante",
           cefrLevel:   s.cefrLevel   ?? "B1",
           llm: {
-            provider: s.llm?.provider ?? "lmstudio",
+            provider,
             endpoint: s.llm?.endpoint ?? "http://localhost:1234",
             model:    s.llm?.model    ?? "",
             apiKey:   s.llm?.apiKey   ?? "",
@@ -114,12 +123,35 @@ export function SettingsPanel({ open, onClose }: Props) {
         });
         setTestStatus("idle");
         setTestResult(null);
+        fetchAvailableModels(provider, s.llm?.endpoint ?? "http://localhost:1234", s.llm?.apiKey ?? "");
       })
       .catch(() => {});
 
     loadBuiltIn();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // ── Modelos disponibles del servidor ─────────────────────────────────────
+  async function fetchAvailableModels(provider: string, endpoint = settings.llm.endpoint, apiKey = settings.llm.apiKey) {
+    if (provider !== "lmstudio" && provider !== "ollama") {
+      setAvailableModels([]);
+      return;
+    }
+    setLoadingModels(true);
+    try {
+      const res = await dotnetRequest<TestResult>("settings", "testConnection", {
+        Provider: provider,
+        Endpoint: endpoint,
+        ApiKey: apiKey || null,
+        Model: null,
+      });
+      setAvailableModels(res.models ?? []);
+    } catch {
+      setAvailableModels([]);
+    } finally {
+      setLoadingModels(false);
+    }
+  }
 
   // ── Provider switch ───────────────────────────────────────────────────────
   function selectProvider(id: string) {
@@ -130,6 +162,7 @@ export function SettingsPanel({ open, onClose }: Props) {
     }));
     setTestStatus("idle");
     setTestResult(null);
+    fetchAvailableModels(id, p.endpoint || settings.llm.endpoint, settings.llm.apiKey);
   }
 
   // ── Test connection ───────────────────────────────────────────────────────
@@ -138,8 +171,10 @@ export function SettingsPanel({ open, onClose }: Props) {
     setTestResult(null);
     try {
       const res = await dotnetRequest<TestResult>("settings", "testConnection", {
+        Provider: settings.llm.provider,
         Endpoint: settings.llm.endpoint,
-        ApiKey:   settings.llm.apiKey || null,
+        ApiKey: settings.llm.apiKey || null,
+        Model: settings.llm.model || null,
       });
       setTestStatus(res.ok ? "ok" : "error");
       setTestResult(res);
@@ -163,7 +198,7 @@ export function SettingsPanel({ open, onClose }: Props) {
           lmStudioApiKey:  settings.llm.apiKey,
         },
       });
-      toast.success("Guardado. Reinicia la app para aplicar el nuevo modelo.");
+      toast.success("Configuración guardada y aplicada.");
       onClose();
     } catch (e: unknown) {
       toast.error("Error al guardar: " + (e as Error).message);
@@ -202,7 +237,7 @@ export function SettingsPanel({ open, onClose }: Props) {
   const currentProvider = PROVIDERS.find((p) => p.id === settings.llm.provider) ?? PROVIDERS[0];
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col bg-background">
+    <div role="dialog" aria-modal="true" aria-label="Configuración" className="absolute inset-0 z-50 flex flex-col bg-background">
       {/* ── Header ── */}
       <div
         className="flex items-center justify-between h-9 px-4 border-b border-border shrink-0 select-none"
@@ -214,6 +249,7 @@ export function SettingsPanel({ open, onClose }: Props) {
         </div>
         <button
           onClick={onClose}
+          aria-label="Cerrar configuración"
           className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
         >
           <X size={13} />
@@ -350,48 +386,44 @@ export function SettingsPanel({ open, onClose }: Props) {
             )}
 
             {/* Model */}
-            <section className="space-y-1.5">
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                Modelo
-                {testResult?.models?.length ? (
-                  <span className="ml-2 normal-case font-normal text-muted-foreground">
-                    — {testResult.models.length} disponibles
-                  </span>
-                ) : null}
-              </p>
-              <input
-                type="text"
-                value={settings.llm.model}
-                onChange={(e) => setSettings((p) => ({ ...p, llm: { ...p.llm, model: e.target.value } }))}
-                placeholder={settings.llm.provider === "builtin" ? "qwen2.5-1.5b" : "llama-3.2-3b-instruct"}
-                list="model-list"
-                className="w-full bg-muted border border-border rounded-md px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-              {testResult?.models?.length ? (
-                <>
-                  <datalist id="model-list">
-                    {testResult.models.map((m) => <option key={m} value={m} />)}
-                  </datalist>
-                  <div className="flex flex-wrap gap-1 pt-0.5">
-                    {testResult.models.slice(0, 6).map((m) => (
-                      <button
-                        key={m}
-                        onClick={() => setSettings((p) => ({ ...p, llm: { ...p.llm, model: m } }))}
-                        className={cn(
-                          "flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] transition-colors",
-                          settings.llm.model === m
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border text-muted-foreground hover:border-muted-foreground hover:text-foreground"
-                        )}
-                      >
-                        <ChevronRight size={9} />
-                        {m.length > 28 ? m.slice(0, 25) + "…" : m}
-                      </button>
+            {settings.llm.provider !== "builtin" && (
+              <section className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Modelo</p>
+                  {(settings.llm.provider === "lmstudio" || settings.llm.provider === "ollama") && (
+                    <button
+                      onClick={() => fetchAvailableModels(settings.llm.provider)}
+                      disabled={loadingModels}
+                      className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+                    >
+                      {loadingModels ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                      {loadingModels ? "Cargando…" : availableModels.length > 0 ? `${availableModels.length} modelos` : "Cargar modelos"}
+                    </button>
+                  )}
+                </div>
+
+                {(settings.llm.provider === "lmstudio" || settings.llm.provider === "ollama") && availableModels.length > 0 ? (
+                  <select
+                    value={settings.llm.model}
+                    onChange={(e) => setSettings((p) => ({ ...p, llm: { ...p.llm, model: e.target.value } }))}
+                    className="w-full bg-muted border border-border rounded-md px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {!settings.llm.model && <option value="">— Seleccionar modelo —</option>}
+                    {availableModels.map((m) => (
+                      <option key={m} value={m}>{m}</option>
                     ))}
-                  </div>
-                </>
-              ) : null}
-            </section>
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={settings.llm.model}
+                    onChange={(e) => setSettings((p) => ({ ...p, llm: { ...p.llm, model: e.target.value } }))}
+                    placeholder="llama-3.2-3b-instruct"
+                    className="w-full bg-muted border border-border rounded-md px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                  />
+                )}
+              </section>
+            )}
 
             {/* API Key */}
             {currentProvider.needsKey && (
@@ -458,7 +490,7 @@ export function SettingsPanel({ open, onClose }: Props) {
                 type="text"
                 value={settings.studentName}
                 onChange={(e) => setSettings((p) => ({ ...p, studentName: e.target.value }))}
-                placeholder="Charlie"
+                placeholder="Estudiante"
                 className="w-full bg-muted border border-border rounded-md px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </section>

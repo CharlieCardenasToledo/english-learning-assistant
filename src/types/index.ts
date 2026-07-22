@@ -17,18 +17,51 @@ export interface DetectedQuestion {
   confidence: number;
 }
 
+export interface QuestionConversationItem extends DetectedQuestion {
+  id: string;
+  answer: string;
+  status: "queued" | "processing" | "answered" | "failed";
+}
+
 export interface AnswerChunk {
   chunk: string;
 }
 
 export interface Session {
   id: number;
+  title?: string;
   startTime: string;
   endTime?: string;
   transcriptionCount: number;
   questionCount: number;
 }
 
+
+export interface SessionEntry {
+  id: number;
+  originalText: string;
+  translatedText?: string;
+  timestamp: string;
+  containsQuestion?: boolean;
+  aiResponse?: string;
+}
+
+export interface SessionQuestion {
+  id: number;
+  questionText: string;
+  suggestedAnswer?: string;
+  wasAnswered: boolean;
+  detectedAt: string;
+}
+
+export interface SessionDetail extends Session {
+  title?: string;
+  summary?: string;
+  status?: string;
+  duration?: string;
+  entries: SessionEntry[];
+  questions: SessionQuestion[];
+}
 export interface VocabularyItem {
   id: number;
   word: string;

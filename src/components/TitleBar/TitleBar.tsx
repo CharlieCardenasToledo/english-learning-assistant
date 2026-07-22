@@ -51,18 +51,21 @@ export function TitleBar({ sessionActive, sessionDuration, questionCount }: Titl
       >
         <button
           onClick={() => getWindow().then(w => w.minimize())}
+          aria-label="Minimizar ventana"
           className="p-1.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
         >
           <Minus size={12} />
         </button>
         <button
           onClick={() => getWindow().then(w => w.toggleMaximize())}
+          aria-label="Maximizar ventana"
           className="p-1.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
         >
           <Square size={11} />
         </button>
         <button
           onClick={() => getWindow().then(w => w.close())}
+          aria-label="Cerrar ventana"
           className="p-1.5 rounded hover:bg-destructive transition-colors text-muted-foreground hover:text-destructive-foreground"
         >
           <X size={12} />
