@@ -118,7 +118,7 @@ public class SessionOrchestratorTests
             options);
 
         var segmentReadyTcs = new TaskCompletionSource<SegmentReadyEvent>();
-        orchestrator.SegmentReady += (s, e) => segmentReadyTcs.TrySetResult(e);
+        orchestrator.SegmentReady += (s, e) => { if (e.Translation is not null) segmentReadyTcs.TrySetResult(e); };
 
         // Act
         var request = new TranscriptionRequest();

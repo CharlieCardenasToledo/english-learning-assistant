@@ -13,7 +13,7 @@ namespace EnglishLearningAssistant.TauriPlugIn.Providers;
 /// Traducción local usando LLamaSharp (llama.cpp en proceso).
 /// Carga el modelo GGUF de forma lazy en el primer uso.
 /// </summary>
-public sealed class LocalLlamaTranslationProvider : ITranslationProvider, IDisposable
+public sealed class LocalLlamaTranslationProvider : ITranslationProvider, ITextGenerationProvider, IDisposable
 {
     private readonly BuiltInAiService _builtIn;
     private readonly ILogger<LocalLlamaTranslationProvider> _logger;
@@ -25,6 +25,7 @@ public sealed class LocalLlamaTranslationProvider : ITranslationProvider, IDispo
     private string?         _loadedModelPath;
 
     public string Name => "Built-in (LLamaSharp)";
+    public string? LastError { get; private set; }
 
     public LocalLlamaTranslationProvider(
         BuiltInAiService builtIn,
@@ -63,20 +64,21 @@ public sealed class LocalLlamaTranslationProvider : ITranslationProvider, IDispo
             var prompt = BuildPrompt(text, sourceLanguage, targetLanguage);
 
             var sb = new StringBuilder();
-            var inferParams = new InferenceParams
-            {
-                MaxTokens   = 512,
-                AntiPrompts = ["<|im_end|>", "<|endoftext|>", "\n\n\n"],
-            };
+            // No pasar AntiPrompts en InferenceParams: LLamaSharp 0.19 usa un buffer de look-ahead
+            // que retiene los tokens que forman el anti-prompt y nunca los yielda, vaciando el resultado.
+            // En su lugar, acumulamos y verificamos manualmente después de cada append.
+            var inferParams = new InferenceParams { MaxTokens = 512 };
+            string[] stopSequences = ["<|im_end|>", "<|endoftext|>", "\n\n\n"];
 
             await foreach (var token in executor.InferAsync(prompt, inferParams, cancellationToken))
             {
-                if (inferParams.AntiPrompts.Any(a => token.Contains(a, StringComparison.Ordinal)))
-                    break;
                 sb.Append(token);
+                if (stopSequences.Any(s => sb.ToString().Contains(s, StringComparison.Ordinal)))
+                    break;
             }
 
-            var translated = sb.ToString().Trim();
+            var raw        = sb.ToString();
+            var translated = stopSequences.Aggregate(raw, (s, stop) => s.Replace(stop, "", StringComparison.Ordinal)).Trim();
             _logger.LogDebug("Translated ({From}→{To}): {Snippet}",
                 sourceLanguage, targetLanguage, translated[..Math.Min(60, translated.Length)]);
 
@@ -95,6 +97,39 @@ public sealed class LocalLlamaTranslationProvider : ITranslationProvider, IDispo
         {
             _logger.LogError(ex, "LocalLlama translation error");
             return TranslationResult.Empty(text);
+        }
+    }
+
+    public async Task<string> GenerateAsync(string systemPrompt, string userPrompt, Action<string>? onPartialUpdate = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var executor = await EnsureModelLoadedAsync(cancellationToken);
+            if (executor is null) return string.Empty;
+            var prompt = $"<|im_start|>system\n{systemPrompt}<|im_end|>\n<|im_start|>user\n{userPrompt}<|im_end|>\n<|im_start|>assistant\n";
+            var sb = new StringBuilder();
+            var inferParams = new InferenceParams { MaxTokens = 512 };
+            string[] stopSequences = ["<|im_end|>", "<|endoftext|>", "```"];
+
+            await foreach (var token in executor.InferAsync(prompt, inferParams, cancellationToken))
+            {
+                sb.Append(token);
+                if (stopSequences.Any(s => sb.ToString().Contains(s, StringComparison.Ordinal)))
+                    break;
+                onPartialUpdate?.Invoke(sb.ToString());
+            }
+
+            var raw    = sb.ToString();
+            var result = stopSequences.Aggregate(raw, (s, stop) => s.Replace(stop, "", StringComparison.Ordinal)).Trim();
+            onPartialUpdate?.Invoke(result);
+            return result;
+        }
+        catch (OperationCanceledException) { return string.Empty; }
+        catch (Exception ex)
+        {
+            LastError = ex.GetBaseException().Message;
+            _logger.LogError(ex, "LocalLlama assistant generation error");
+            return string.Empty;
         }
     }
 

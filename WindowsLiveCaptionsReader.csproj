@@ -57,6 +57,17 @@
     <EmbeddedResource Remove="EnglishLearningAssistant.Core\**" />
     <None Remove="EnglishLearningAssistant.Core\**" />
     <Page Remove="EnglishLearningAssistant.Core\**" />
+
+    <!-- El proyecto raíz no debe compilar fuentes ni artefactos de los hosts Tauri/.NET anidados. -->
+    <Compile Remove="src-dotnet\**" />
+    <EmbeddedResource Remove="src-dotnet\**" />
+    <None Remove="src-dotnet\**" />
+    <Page Remove="src-dotnet\**" />
+
+    <Compile Remove="src-tauri\**" />
+    <EmbeddedResource Remove="src-tauri\**" />
+    <None Remove="src-tauri\**" />
+    <Page Remove="src-tauri\**" />
   </ItemGroup>
 
 </Project>

@@ -67,7 +67,11 @@ namespace WindowsLiveCaptionsReader
 
             // Existing Legacy/Refactored Services (registered for compatibility)
             services.AddSingleton<CaptionReader>();
-            services.AddSingleton<LmStudioService>(sp => new LmStudioService(sp.GetRequiredService<AppConfiguration>().LmStudio.ModelName));
+            services.AddSingleton<LmStudioService>(sp =>
+            {
+                var settings = sp.GetRequiredService<AppConfiguration>().LmStudio;
+                return new LmStudioService(settings.ModelName, settings.BaseUrl, settings.ApiKey);
+            });
             services.AddSingleton<WhisperService>();
             services.AddSingleton<AudioCaptureService>();
             services.AddSingleton<SessionService>();

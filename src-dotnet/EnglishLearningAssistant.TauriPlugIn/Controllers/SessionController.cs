@@ -3,27 +3,68 @@ using WindowsLiveCaptionsReader.Services;
 
 namespace EnglishLearningAssistant.TauriPlugIn.Controllers;
 
-public class SessionController(SessionService sessions)
+public class SessionController(SessionService sessions, CaptionHostedService captionService)
 {
-    public async Task<object> Initialize()
+    public object Initialize()
     {
         try
         {
-            await sessions.InitializeAsync();
+            Task.Run(sessions.InitializeAsync).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
             EnglishLearningAssistant.Core.AppLogger.Error("Error initializing session DB", ex);
+            return new { ok = false, error = ex.Message };
         }
         return new { ok = true };
     }
 
-    public async Task<object> List()
+    public object Start()
     {
         try
         {
-            await sessions.InitializeAsync();
-            return await sessions.GetAllSessionsAsync();
+            Task.Run(captionService.StartSessionAsync).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            EnglishLearningAssistant.Core.AppLogger.Error("Error starting session", ex);
+            return new { ok = false, error = ex.Message };
+        }
+        return new { ok = true, sessionId = captionService.CurrentSessionId };
+    }
+
+    public object Stop()
+    {
+        try
+        {
+            Task.Run(captionService.StopSessionAsync).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            EnglishLearningAssistant.Core.AppLogger.Error("Error stopping session", ex);
+            return new { ok = false, error = ex.Message };
+        }
+        return new { ok = true };
+    }
+
+    public object List()
+    {
+        try
+        {
+            return Task.Run(async () =>
+            {
+                await sessions.InitializeAsync();
+                var list = await sessions.GetAllSessionsAsync();
+                return (object)list.Select(s => new
+                {
+                    id = s.Id,
+                    title = s.Title,
+                    startTime = s.StartTime.ToString("o"),
+                    endTime = s.EndTime?.ToString("o"),
+                    transcriptionCount = s.Metadata?.TotalEntries ?? 0,
+                    questionCount = s.Metadata?.QuestionsDetected ?? 0
+                }).ToList();
+            }).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -32,17 +73,23 @@ public class SessionController(SessionService sessions)
         }
     }
 
-    public async Task<object> Get(GetSessionRequest req) =>
-        await sessions.LoadSessionAsync(req.Id) ?? throw new KeyNotFoundException($"Session {req.Id} not found");
+    public object Get(GetSessionRequest req) =>
+        Task.Run(async () => (object)(await sessions.LoadSessionAsync(req.Id) ??
+            throw new KeyNotFoundException($"Session {req.Id} not found")))
+            .GetAwaiter().GetResult();
 
-    public async Task<object> Delete(DeleteSessionRequest req)
+    public object Delete(DeleteSessionRequest req)
     {
-        await sessions.DeleteSessionAsync(req.Id);
+        Task.Run(() => sessions.DeleteSessionAsync(req.Id)).GetAwaiter().GetResult();
         return new { ok = true };
     }
 
-    public async Task<object> Export(ExportSessionRequest req) =>
-        new { markdown = await sessions.ExportToMarkdownAsync(req.Id) };
+    public object Export(ExportSessionRequest req) =>
+        new
+        {
+            markdown = Task.Run(() => sessions.ExportToMarkdownAsync(req.Id))
+                .GetAwaiter().GetResult()
+        };
 }
 
 public record GetSessionRequest(int Id);

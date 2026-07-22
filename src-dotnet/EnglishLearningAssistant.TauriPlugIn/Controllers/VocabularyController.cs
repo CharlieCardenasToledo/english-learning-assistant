@@ -4,29 +4,45 @@ namespace EnglishLearningAssistant.TauriPlugIn.Controllers;
 
 public class VocabularyController(VocabularyService vocabulary)
 {
-    public async Task<object> Initialize()
+    public object Initialize()
     {
-        await vocabulary.InitializeAsync();
+        Task.Run(vocabulary.InitializeAsync).GetAwaiter().GetResult();
         return new { ok = true };
     }
 
-    public async Task<object> List() =>
-        await vocabulary.GetAllVocabularyAsync();
-
-    public async Task<object> Add(AddWordRequest req)
+    public object List()
     {
-        await vocabulary.AddOrUpdateWordAsync(req.Word, req.Definition, req.Translation, req.Context);
+        var items = Task.Run(vocabulary.GetAllVocabularyAsync).GetAwaiter().GetResult();
+        return items.Select(item => new
+        {
+            id = item.Id,
+            word = item.Word,
+            definition = item.Definition,
+            spanishTranslation = item.SpanishTranslation,
+            exampleSentence = item.ExampleSentence,
+            timesEncountered = item.TimesEncountered,
+            firstSeen = item.FirstSeen.ToString("o"),
+            lastSeen = item.LastSeen.ToString("o")
+        }).ToList();
+    }
+
+    public object Add(AddWordRequest req)
+    {
+        Task.Run(() => vocabulary.AddOrUpdateWordAsync(
+            req.Word, req.Definition, req.Translation, req.Context))
+            .GetAwaiter().GetResult();
         return new { ok = true };
     }
 
-    public async Task<object> Delete(DeleteWordRequest req)
+    public object Delete(DeleteWordRequest req)
     {
-        await vocabulary.DeleteWordAsync(req.Id);
+        Task.Run(() => vocabulary.DeleteWordAsync(req.Id)).GetAwaiter().GetResult();
         return new { ok = true };
     }
 
-    public async Task<object> Analyze(AnalyzeRequest req) =>
-        await vocabulary.ExtractPotentialVocabularyAsync(req.Text);
+    public object Analyze(AnalyzeRequest req) =>
+        Task.Run(() => vocabulary.ExtractPotentialVocabularyAsync(req.Text))
+            .GetAwaiter().GetResult();
 }
 
 public record AddWordRequest(string Word, string Definition, string Translation, string Context = "");

@@ -57,7 +57,7 @@ public sealed class AppConfiguration
     private static AppConfiguration? _instance;
     private static readonly object _lock = new();
 
-    public string StudentName { get; private set; } = "Charlie";
+    public string StudentName { get; private set; } = "Estudiante";
     public string CefrLevel { get; private set; } = "B1";
     public string Theme { get; private set; } = "System";
     public LmStudioConfig LmStudio { get; private set; } = new();
@@ -65,6 +65,23 @@ public sealed class AppConfiguration
     public TranscriptionConfig Transcription { get; private set; } = new();
     public TranslationConfig Translation { get; private set; } = new();
     public StorageConfig Storage { get; private set; } = new();
+
+    /// <summary>Applies persisted user settings to the running process.</summary>
+    public void ApplyUserSettings(
+        string? studentName,
+        string? cefrLevel,
+        string? llmProvider,
+        string? llmBaseUrl,
+        string? llmModel,
+        string? llmApiKey)
+    {
+        if (!string.IsNullOrWhiteSpace(studentName)) StudentName = studentName.Trim();
+        if (!string.IsNullOrWhiteSpace(cefrLevel)) CefrLevel = cefrLevel.Trim().ToUpperInvariant();
+        if (!string.IsNullOrWhiteSpace(llmProvider)) LmStudio.Provider = llmProvider.Trim().ToLowerInvariant();
+        if (llmBaseUrl is not null) LmStudio.BaseUrl = llmBaseUrl.Trim();
+        if (llmModel is not null) LmStudio.ModelName = llmModel.Trim();
+        if (llmApiKey is not null) LmStudio.ApiKey = llmApiKey.Trim();
+    }
 
     private IConfiguration? _raw;
 

@@ -30,6 +30,17 @@
     </None>
   </ItemGroup>
 
+  <!-- SQLitePCLRaw probes for e_sqlite3.dll relative to the assembly directory.
+       When loaded via TauriDotNetBridge (exe in a different dir), the runtimes/ subfolder
+       is not on the P/Invoke search path, so we flatten it to the output root. -->
+  <Target Name="FlattenSqliteNative" AfterTargets="Build">
+    <Copy
+      SourceFiles="$(OutputPath)\runtimes\win-x64\native\e_sqlite3.dll"
+      DestinationFolder="$(OutputPath)"
+      SkipUnchangedFiles="true"
+      Condition="Exists('$(OutputPath)\runtimes\win-x64\native\e_sqlite3.dll')" />
+  </Target>
+
   <!-- TauriDotNetBridge.targets usa $(TargetFramework)=net8.0-windows pero el runtimeconfig
        está en lib/net8.0 (sin -windows), por lo que el Exists() falla y no se copia.
        Además, el runtimeconfig original solo referencia Microsoft.NETCore.App, pero nuestro

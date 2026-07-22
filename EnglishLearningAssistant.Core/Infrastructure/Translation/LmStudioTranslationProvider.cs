@@ -16,7 +16,7 @@ namespace EnglishLearningAssistant.Infrastructure.Translation;
 ///
 /// (T6.1)
 /// </summary>
-public sealed class LmStudioTranslationProvider : ITranslationProvider
+public sealed class LmStudioTranslationProvider : ITranslationProvider, ITextGenerationProvider
 {
     private readonly LmStudioService _service;
     private readonly ILogger<LmStudioTranslationProvider> _logger;
@@ -82,4 +82,9 @@ public sealed class LmStudioTranslationProvider : ITranslationProvider
             return TranslationResult.Empty(text);
         }
     }
+    public async Task<string> GenerateAsync(string systemPrompt, string userPrompt, Action<string>? onPartialUpdate = null, CancellationToken cancellationToken = default)
+    {
+        return await _service.StreamChatAsync(systemPrompt, userPrompt, onPartialUpdate ?? (_ => { }), cancellationToken);
+    }
+
 }

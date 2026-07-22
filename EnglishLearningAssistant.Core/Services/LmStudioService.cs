@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -13,28 +14,38 @@ namespace WindowsLiveCaptionsReader.Services
     public class LmStudioService
     {
         private readonly HttpClient _httpClient;
-        private const string BaseUrl = "http://localhost:1234";
-        private const string ChatUrl = BaseUrl + "/v1/chat/completions";
+        private string _baseUrl = "http://localhost:1234";
         private string _modelName = "llama-3.2-3b-instruct";
+        private string? _apiKey;
 
         private static readonly TimeSpan ShortTimeout = TimeSpan.FromSeconds(10);
         private static readonly TimeSpan LongTimeout  = TimeSpan.FromSeconds(120);
 
-        public LmStudioService(string modelName = "llama-3.2-3b-instruct")
+        public LmStudioService(
+            string modelName = "llama-3.2-3b-instruct",
+            string baseUrl = "http://localhost:1234",
+            string? apiKey = null)
         {
-            _httpClient = new HttpClient();
-            _httpClient.Timeout = LongTimeout;
-            _modelName = modelName;
+            _httpClient = new HttpClient { Timeout = LongTimeout };
+            Configure(baseUrl, modelName, apiKey);
         }
 
-        public void SetModel(string modelName) => _modelName = modelName;
+        public void SetModel(string modelName) => _modelName = modelName.Trim();
+
+        public void Configure(string baseUrl, string modelName, string? apiKey)
+        {
+            _baseUrl = NormalizeBaseUrl(baseUrl);
+            _modelName = modelName.Trim();
+            _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
+        }
 
         public async Task<List<string>> GetInstalledModelsAsync()
         {
             try
             {
                 using var cts = new CancellationTokenSource(ShortTimeout);
-                var response = await _httpClient.GetAsync(BaseUrl + "/v1/models", cts.Token);
+                using var request = CreateRequest(HttpMethod.Get, BuildApiUrl("models"));
+                using var response = await _httpClient.SendAsync(request, cts.Token);
                 if (!response.IsSuccessStatusCode) return [];
 
                 var json = await response.Content.ReadAsStringAsync(cts.Token);
@@ -56,7 +67,8 @@ namespace WindowsLiveCaptionsReader.Services
             try
             {
                 using var cts = new CancellationTokenSource(ShortTimeout);
-                var response = await _httpClient.GetAsync(BaseUrl + "/v1/models", cts.Token);
+                using var request = CreateRequest(HttpMethod.Get, BuildApiUrl("models"));
+                using var response = await _httpClient.SendAsync(request, cts.Token);
                 return response.IsSuccessStatusCode;
             }
             catch
@@ -467,7 +479,7 @@ Word|Definition|Translation";
         private async Task<string> SendStreamingRequestAsync(object requestData, Action<string> onPartialUpdate, CancellationToken token, Action<string>? onReasoningUpdate = null)
         {
             var jsonContent = JsonSerializer.Serialize(requestData);
-            var request = new HttpRequestMessage(HttpMethod.Post, ChatUrl);
+            var request = CreateRequest(HttpMethod.Post, BuildApiUrl("chat/completions"));
             request.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
             try
@@ -560,7 +572,9 @@ Word|Definition|Translation";
 
             try
             {
-                var response = await _httpClient.PostAsync(ChatUrl, content, token).ConfigureAwait(false);
+                using var request = CreateRequest(HttpMethod.Post, BuildApiUrl("chat/completions"));
+                request.Content = content;
+                using var response = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode) return $"[Error: {response.StatusCode}]";
 
                 var responseString = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
@@ -587,6 +601,37 @@ Word|Definition|Translation";
         private void SafeLog(string message)
         {
             try { File.AppendAllText("lmstudio_debug.log", message); } catch { }
+        }
+
+        private HttpRequestMessage CreateRequest(HttpMethod method, string url)
+        {
+            var request = new HttpRequestMessage(method, url);
+            if (!string.IsNullOrWhiteSpace(_apiKey))
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            return request;
+        }
+
+        private string BuildApiUrl(string resource)
+        {
+            var root = _baseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
+                ? _baseUrl
+                : _baseUrl + "/v1";
+            return root + "/" + resource.TrimStart('/');
+        }
+
+        private static string NormalizeBaseUrl(string baseUrl)
+        {
+            var candidate = baseUrl?.Trim().TrimEnd('/') ?? "";
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri) ||
+                uri.Scheme is not ("http" or "https") ||
+                !string.IsNullOrEmpty(uri.UserInfo))
+            {
+                throw new ArgumentException(
+                    "The provider endpoint must be an absolute HTTP or HTTPS URL.",
+                    nameof(baseUrl));
+            }
+
+            return candidate;
         }
 
         private string CleanOutput(string? output)

@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using EnglishLearningAssistant.Core.Abstractions;
 using EnglishLearningAssistant.Core.Models;
 using Microsoft.Extensions.Logging;
+using WindowsLiveCaptionsReader.Services;
 
 namespace EnglishLearningAssistant.Application.Sessions;
 
@@ -59,10 +60,13 @@ public sealed class SessionOrchestrator : IAsyncDisposable
     private readonly ITranslationProvider _translationProvider;
     private readonly ILogger<SessionOrchestrator> _logger;
     private readonly OrchestratorOptions _options;
+    private readonly QuestionDetectionService? _questionDetection;
+    private readonly LmStudioService? _lmStudio;
+    private readonly ITextGenerationProvider? _textGenerationProvider;
 
     // ─── Question pipeline ─────────────────────────────────────────────────────
-    // FIFO bounded channel: preguntas nuevas no cancelan las en-vuelo.
-    // Si hay 5 en cola, se descarta la más antigua (DropOldest).
+    // Cola FIFO sin descarte: cada pregunta detectada espera su turno y se responde.
+
     private readonly Channel<OrchestratorQuestion> _questionChannel;
     private CancellationTokenSource _shutdownCts = new();
     private Task? _questionWorkerTask;
@@ -75,6 +79,15 @@ public sealed class SessionOrchestrator : IAsyncDisposable
     private readonly List<string> _fragmentBuffer = new();
     private Timer? _settleTimer;
     private static readonly TimeSpan SettleDelay = TimeSpan.FromSeconds(1.2);
+
+    // Rastreadores de oraciones para procesamiento sobre el flujo parcial (Windows Live Captions)
+    private readonly HashSet<string> _processedSentences = new(StringComparer.OrdinalIgnoreCase);
+    private string _lastRawText = string.Empty;
+    private int _sequenceId;
+
+    // ─── Conversation context (últimas 8 frases confirmadas) ─────────────────
+    private readonly Queue<string> _conversationContext = new();
+    private const int MaxContextSentences = 8;
 
     // ─── Events ───────────────────────────────────────────────────────────────
 
@@ -90,21 +103,38 @@ public sealed class SessionOrchestrator : IAsyncDisposable
     /// <summary>Estado general del orquestador para mostrar en status bar.</summary>
     public event EventHandler<string>? StatusChanged;
 
+    /// <summary>Pregunta detectada con texto, nivel (1-4) y confianza.</summary>
+    public event EventHandler<QuestionDetectedEvent>? QuestionDetected;
+
+    /// <summary>Fragmento de respuesta LLM en streaming.</summary>
+    public event EventHandler<string>? AnswerChunkReceived;
+
+    /// <summary>Respuesta LLM completa.</summary>
+    public event EventHandler<string>? AnswerCompleted;
+
     public SessionOrchestrator(
         ITranscriptionProvider transcriptionProvider,
         ITranslationProvider translationProvider,
         ILogger<SessionOrchestrator> logger,
-        OrchestratorOptions? options = null)
+        OrchestratorOptions? options = null,
+        QuestionDetectionService? questionDetection = null,
+        LmStudioService? lmStudio = null,
+        ITextGenerationProvider? textGenerationProvider = null)
     {
         _transcriptionProvider = transcriptionProvider ?? throw new ArgumentNullException(nameof(transcriptionProvider));
         _translationProvider = translationProvider ?? throw new ArgumentNullException(nameof(translationProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _options = options ?? new OrchestratorOptions();
+        _questionDetection = questionDetection;
+        _lmStudio = lmStudio;
+        _textGenerationProvider = textGenerationProvider;
 
-        _questionChannel = Channel.CreateBounded<OrchestratorQuestion>(
-            new BoundedChannelOptions(_options.QuestionQueueCapacity)
+        _questionChannel = Channel.CreateUnbounded<OrchestratorQuestion>(
+            new UnboundedChannelOptions
             {
-                FullMode = BoundedChannelFullMode.DropOldest
+                SingleReader = true,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false
             });
 
         // Settle timer: se reinicia en cada fragmento; cuando dispara significa que
@@ -174,29 +204,127 @@ public sealed class SessionOrchestrator : IAsyncDisposable
     {
         if (segment.IsPartial)
         {
-            // Parciales: publicar al frontend y reiniciar timer
+            _lastRawText = segment.Text;
+
+            // Enviar el texto parcial actual al frontend para renderizado en cursiva
             SegmentReady?.Invoke(this, new SegmentReadyEvent(segment, null));
             TranscriptionTextUpdated?.Invoke(this, segment.Text);
+
+            // Extraer y confirmar oraciones completas del bloque de texto acumulativo
+            ProcessSentencesFromRawText(segment.Text);
+
             RestartSettleTimer();
             return;
         }
 
-        // Segmento confirmado: agregar al buffer de fragmentos
-        _fragmentBuffer.Add(segment.Text);
+        // Los proveedores pueden entregar segmentos finales por palabras o fragmentos.
+        // Acumularlos conserva la oración completa y evita traducir cada palabra por separado.
+        if (!string.IsNullOrWhiteSpace(segment.Text))
+        {
+            var cleanText = segment.Text.Trim();
+            if (!_processedSentences.Contains(cleanText))
+            {
+                _fragmentBuffer.Add(cleanText);
+                if (EndsSentence(cleanText))
+                    FlushFragmentBuffer();
+            }
+        }
 
-        // Si termina oración → flush inmediato (fast path)
-        if (EndsSentence(segment.Text))
-            FlushFragmentBuffer();
-
-        // Reiniciar settle timer en cada fragmento
         RestartSettleTimer();
         TranscriptionTextUpdated?.Invoke(this, segment.Text);
     }
 
+    private void ProcessSentencesFromRawText(string rawText)
+    {
+        if (string.IsNullOrWhiteSpace(rawText)) return;
+
+        // Limpiar saltos de línea y normalizar espacios
+        var normalized = rawText.Replace('\r', ' ').Replace('\n', ' ');
+
+        // Buscar oraciones terminadas en . ? o !
+        int start = 0;
+        for (int i = 0; i < normalized.Length; i++)
+        {
+            char c = normalized[i];
+            if (c == '.' || c == '?' || c == '!')
+            {
+                string sentence = normalized[start..(i + 1)].Trim();
+                start = i + 1;
+
+                // Solo procesar si tiene una longitud razonable
+                if (sentence.Length > 5)
+                {
+                    if (_processedSentences.Add(sentence))
+                    {
+                        _logger.LogInformation("[Orchestrator] Oración confirmada: {Sentence}", sentence);
+
+                        var confirmed = new TranscriptSegment
+                        {
+                            SequenceId = Interlocked.Increment(ref _sequenceId),
+                            Text       = sentence,
+                            IsPartial  = false,
+                            Source     = _transcriptionProvider.Name,
+                            StartTime  = TimeSpan.Zero,
+                        };
+
+                        // Publicar oracion confirmada en el panel de transcripcion
+                        SegmentReady?.Invoke(this, new SegmentReadyEvent(confirmed, null));
+
+                        // Disparar traducción y detección de preguntas en paralelo
+                        _ = ProcessSentenceForQuestionsAsync(sentence, "");
+                        _ = AutoTranslateAsync(sentence);
+                    }
+                }
+            }
+        }
+    }
+
     private void OnSettleTimerFired(object? state)
     {
-        // Silencio detectado → flush del buffer de fragmentos
-        FlushFragmentBuffer();
+        if (_fragmentBuffer.Count > 0)
+        {
+            FlushFragmentBuffer();
+            return;
+        }
+
+        // Silencio detectado: forzar procesamiento de cualquier texto pendiente en la cola de Live Captions
+        if (string.IsNullOrWhiteSpace(_lastRawText)) return;
+
+        var normalized = _lastRawText.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (normalized.Length == 0) return;
+
+        // Encontrar la última parte después del último signo de puntuación
+        int lastPunct = Math.Max(normalized.LastIndexOf('.'),
+                         Math.Max(normalized.LastIndexOf('?'), normalized.LastIndexOf('!')));
+
+        string remaining = lastPunct >= 0 && lastPunct < normalized.Length - 1
+            ? normalized[(lastPunct + 1)..].Trim()
+            : normalized;
+
+        if (remaining.Length > 3 && !_processedSentences.Contains(remaining))
+        {
+            // Añadir punto final si el usuario dejó de hablar y no usó puntuación
+            if (!EndsSentence(remaining))
+                remaining += ".";
+
+            if (_processedSentences.Add(remaining))
+            {
+                _logger.LogInformation("[Orchestrator] Forzada oración final por silencio: {Sentence}", remaining);
+
+                var confirmed = new TranscriptSegment
+                {
+                    SequenceId = Interlocked.Increment(ref _sequenceId),
+                    Text       = remaining,
+                    IsPartial  = false,
+                    Source     = _transcriptionProvider.Name,
+                    StartTime  = TimeSpan.Zero,
+                };
+
+                SegmentReady?.Invoke(this, new SegmentReadyEvent(confirmed, null));
+                _ = ProcessSentenceForQuestionsAsync(remaining, "");
+                _ = AutoTranslateAsync(remaining);
+            }
+        }
     }
 
     private void RestartSettleTimer()
@@ -215,7 +343,7 @@ public sealed class SessionOrchestrator : IAsyncDisposable
         string sentence = string.Join(" ", _fragmentBuffer).Trim();
         _fragmentBuffer.Clear();
 
-        if (string.IsNullOrEmpty(sentence)) return;
+        if (string.IsNullOrEmpty(sentence) || !_processedSentences.Add(sentence)) return;
 
         string previous = _previousSegmentText;
         _previousSegmentText = sentence;
@@ -323,15 +451,51 @@ public sealed class SessionOrchestrator : IAsyncDisposable
         await _questionChannel.Writer.WriteAsync(new OrchestratorQuestion(question, IsManual: true));
     }
 
-    // Hook para conectar con el servicio de detección existente (QuestionDetectionService)
-    // Se completa en T7.1 cuando se refactoriza ese servicio.
+    private void AddToConversationContext(string sentence)
+    {
+        _conversationContext.Enqueue(sentence);
+        while (_conversationContext.Count > MaxContextSentences)
+            _conversationContext.Dequeue();
+    }
+
     private async Task ProcessSentenceForQuestionsAsync(string sentence, string previousSentence)
     {
-        // TODO T7.1: Mover lógica L1-L4 de MainWindow aquí
-        // Por ahora se mantiene en MainWindow y se conectará en T7.1
-        await Task.CompletedTask;
-        _ = sentence;
-        _ = previousSentence;
+        if (_questionDetection is null) return;
+        if (string.IsNullOrWhiteSpace(sentence)) return;
+
+        AddToConversationContext(sentence);
+
+        try
+        {
+            var result = await _questionDetection.AnalyzeWithConfidenceAsync(
+                sentence, _options.StudentName, _shutdownCts.Token);
+
+            if (!result.IsQuestion) return;
+
+            // Calcular nivel a partir del prefijo DetectedVia
+            int level = result.DetectedVia switch
+            {
+                var v when v.StartsWith("L4") => 4,
+                var v when v.StartsWith("L3") => 3,
+                var v when v.StartsWith("L2") => 2,
+                _ => 1
+            };
+
+            _logger.LogInformation("Pregunta {Level} detectada ({Via}, {Conf:P0}): {Text}",
+                level, result.DetectedVia, result.Confidence, sentence[..Math.Min(60, sentence.Length)]);
+
+            QuestionDetected?.Invoke(this, new QuestionDetectedEvent(sentence, level, result.Confidence));
+
+            // Encolar sin cancelar respuesta en vuelo
+            await _questionChannel.Writer.WriteAsync(
+                new OrchestratorQuestion(sentence, Level: level, Confidence: result.Confidence),
+                _shutdownCts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error en detección de preguntas");
+        }
     }
 
     // ─── Question worker ──────────────────────────────────────────────────────
@@ -378,18 +542,68 @@ public sealed class SessionOrchestrator : IAsyncDisposable
     }
 
     /// <summary>
-    /// Genera respuesta estructurada a una pregunta detectada.
-    /// TODO T7.3: Conectar con prompt builder y streaming real de LM Studio.
+    /// Genera respuesta estructurada a una pregunta detectada usando LM Studio con streaming.
     /// </summary>
     private async Task GenerateQuestionResponseAsync(OrchestratorQuestion job, CancellationToken token)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeoutCts.CancelAfter(_options.QuestionGenerationTimeout);
 
-        // TODO T7.3: Mover el bloque StreamChatAsync de MainWindow.GenerateResponseAsync aquí
+        if (_textGenerationProvider is null)
+        {
+            _logger.LogWarning("Ningún proveedor de generación disponible — omitiendo respuesta a pregunta");
+            AnswerCompleted?.Invoke(this, string.Empty);
+            return;
+        }
+
         _logger.LogInformation("Generando respuesta para: {Question}", job.Question[..Math.Min(50, job.Question.Length)]);
 
-        await Task.Delay(50, timeoutCts.Token); // placeholder — se reemplaza en T7.3
+        string context = string.Join("\n", _conversationContext);
+        string level = _options.CefrLevel;
+        string student = _options.StudentName;
+
+        string systemPrompt =
+            $"You are a helpful English tutor assisting a {level}-level student named {student}. " +
+            $"The student is listening to a conversation in English. " +
+            $"Answer the following question clearly and naturally, adapting your language to the {level} level. " +
+            $"Keep the answer concise (2-4 sentences). Respond in English.";
+
+        string userPrompt = context.Length > 0
+            ? $"Conversation context:\n{context}\n\nQuestion: {job.Question}"
+            : $"Question: {job.Question}";
+
+        string lastSent = string.Empty;
+        string fullAnswer = string.Empty;
+
+        try
+        {
+            fullAnswer = await _textGenerationProvider.GenerateAsync(
+                systemPrompt,
+                userPrompt,
+                onPartialUpdate: accumulated =>
+                {
+                    // StreamChatAsync entrega el texto acumulado; emitir solo el sufijo nuevo
+                    if (accumulated.Length > lastSent.Length)
+                    {
+                        string chunk = accumulated[lastSent.Length..];
+                        lastSent = accumulated;
+                        AnswerChunkReceived?.Invoke(this, chunk);
+                    }
+                },
+                cancellationToken: timeoutCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Timeout o cancelación generando respuesta");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error en StreamChatAsync");
+        }
+        finally
+        {
+            AnswerCompleted?.Invoke(this, fullAnswer);
+        }
     }
 
     // ─── Health monitoring ────────────────────────────────────────────────────
@@ -417,4 +631,7 @@ public sealed class SessionOrchestrator : IAsyncDisposable
 }
 
 /// <summary>Representa una pregunta en la cola interna del orquestador.</summary>
-public sealed record OrchestratorQuestion(string Question, bool IsManual = false);
+public sealed record OrchestratorQuestion(string Question, bool IsManual = false, int Level = 1, float Confidence = 0.9f);
+
+/// <summary>Datos del evento QuestionDetected.</summary>
+public sealed record QuestionDetectedEvent(string Text, int Level, float Confidence);

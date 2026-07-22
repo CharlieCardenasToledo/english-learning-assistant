@@ -62,8 +62,9 @@ public sealed class BuiltInAiService
     private readonly ILogger<BuiltInAiService> _logger;
     private readonly string _modelsDir;
 
+    private readonly object _downloadGate = new();
     private CancellationTokenSource? _downloadCts;
-    private string? _downloadingModelId;
+    private volatile string? _downloadingModelId;
 
     public BuiltInAiService(IEventPublisher publisher, ILogger<BuiltInAiService> logger)
     {
@@ -139,28 +140,57 @@ public sealed class BuiltInAiService
         var model = Catalog.FirstOrDefault(m => m.Id == modelId)
             ?? throw new ArgumentException($"Unknown model: {modelId}");
 
-        CancelDownload();
-        _downloadCts      = new CancellationTokenSource();
-        _downloadingModelId = modelId;
+        CancellationTokenSource download;
+        lock (_downloadGate)
+        {
+            _downloadCts?.Cancel();
+            download = new CancellationTokenSource();
+            _downloadCts = download;
+            _downloadingModelId = modelId;
+        }
 
-        _ = Task.Run(() => DownloadAsync(model, _downloadCts.Token));
+        _ = Task.Run(() => DownloadAsync(model, download));
         return Task.CompletedTask;
     }
 
     public void CancelDownload()
     {
-        _downloadCts?.Cancel();
-        _downloadCts        = null;
-        _downloadingModelId = null;
+        CancellationTokenSource? current;
+        lock (_downloadGate)
+        {
+            current = _downloadCts;
+            _downloadCts = null;
+            _downloadingModelId = null;
+        }
+        current?.Cancel();
     }
 
-    async Task DownloadAsync(BuiltInModelInfo model, CancellationToken token)
+    private bool ClearDownload(CancellationTokenSource download)
+    {
+        lock (_downloadGate)
+        {
+            if (!ReferenceEquals(_downloadCts, download)) return false;
+            _downloadCts = null;
+            _downloadingModelId = null;
+            return true;
+        }
+    }
+
+    async Task DownloadAsync(BuiltInModelInfo model, CancellationTokenSource download)
+    {
+        var token = download.Token;
     {
         Directory.CreateDirectory(_modelsDir);
         var dest = Path.Combine(_modelsDir, model.Filename);
         var url  = $"https://huggingface.co/{model.Repo}/resolve/main/{model.Filename}";
 
         var existingBytes = File.Exists(dest) ? new FileInfo(dest).Length : 0L;
+        if (existingBytes > 0 &&
+            (!IsValidGguf(dest) || existingBytes >= model.FileSizeBytes * 0.99))
+        {
+            File.Delete(dest);
+            existingBytes = 0;
+        }
         _logger.LogInformation("Downloading {Model} from {Url} (resume at {Bytes} B)", model.Id, url, existingBytes);
 
         try
@@ -176,12 +206,17 @@ public sealed class BuiltInAiService
             using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
             response.EnsureSuccessStatusCode();
 
-            var contentLen = response.Content.Headers.ContentLength ?? (model.FileSizeBytes - existingBytes);
-            var totalBytes = existingBytes + contentLen;
+            var resumed = existingBytes > 0 &&
+                response.StatusCode == System.Net.HttpStatusCode.PartialContent;
+            if (!resumed) existingBytes = 0;
+
+            var contentLen = response.Content.Headers.ContentLength ?? model.FileSizeBytes;
+            var totalBytes = response.Content.Headers.ContentRange?.Length ??
+                (resumed ? existingBytes + contentLen : contentLen);
 
             using var net  = await response.Content.ReadAsStreamAsync(token);
             await using var file = new FileStream(dest,
-                existingBytes > 0 ? FileMode.Append : FileMode.Create,
+                resumed ? FileMode.Append : FileMode.Create,
                 FileAccess.Write, FileShare.None, 8 * 1024 * 1024);
 
             var buf         = new byte[65_536];
@@ -210,9 +245,9 @@ public sealed class BuiltInAiService
             }
 
             await file.FlushAsync(token);
-            _downloadingModelId = null;
+            ClearDownload(download);
 
-            if (IsValidGguf(dest))
+            if (FileStatus(model) == "available")
             {
                 _logger.LogInformation("{Model} downloaded and validated.", model.Id);
                 Emit(model.Id, 1.0, totalBytes, totalBytes, 0, "available");
@@ -226,16 +261,18 @@ public sealed class BuiltInAiService
         }
         catch (OperationCanceledException)
         {
-            _downloadingModelId = null;
+            var wasCurrent = ClearDownload(download);
+            var partialBytes = File.Exists(dest) ? new FileInfo(dest).Length : 0L;
             _logger.LogInformation("Download of {Model} cancelled.", model.Id);
-            Emit(model.Id, 0, existingBytes, model.FileSizeBytes, 0, "not_downloaded");
+            if (wasCurrent) Emit(model.Id, 0, partialBytes, model.FileSizeBytes, 0, "incomplete");
         }
         catch (Exception ex)
         {
-            _downloadingModelId = null;
+            var wasCurrent = ClearDownload(download);
             _logger.LogError(ex, "Error downloading {Model}.", model.Id);
-            Emit(model.Id, 0, 0, model.FileSizeBytes, 0, $"error");
+            if (wasCurrent) Emit(model.Id, 0, 0, model.FileSizeBytes, 0, "error");
         }
+    }
     }
 
     void Emit(string modelId, double progress, long downloadedBytes, long totalBytes, double speedMbps, string status) =>
